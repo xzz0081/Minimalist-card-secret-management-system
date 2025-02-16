@@ -242,6 +242,12 @@ verifyCard($cardKey);
 
 ## 更新日志
 
+### v1.2.0 (2024-02-18)
+- 优化卡密状态显示
+- 添加实时倒计时功能
+- 增加剩余时间的精确显示（时分秒）
+- 改进过期状态判断逻辑
+
 ### v1.1.0 (2024-02-17)
 - 添加设备限制功能
 - 增加设备识别机制
@@ -249,5 +255,65 @@ verifyCard($cardKey);
 
 ### v1.0.0 (2024-02-17)
 - 初始版本发布
-- 实现卡密验证基本功能
-- 提供剩余时间查询 
+- 基本卡密验证功能
+- 时间限制功能
+
+## 状态说明
+
+卡密可能存在以下几种状态：
+
+1. **未使用**
+   - 卡密尚未被激活
+   - `valid` 为 true
+   - `remaining_minutes` 为初始设置时间
+
+2. **使用中**
+   - 卡密已激活且未过期
+   - `valid` 为 true
+   - `remaining_minutes` 为实时剩余分钟数
+   - 支持精确到秒的倒计时显示
+
+3. **已过期**
+   - 卡密已超过有效期
+   - `valid` 为 false
+   - `remaining_minutes` 为 0
+
+4. **设备冲突**
+   - 卡密被其他设备使用
+   - `valid` 为 false
+   - 返回403状态码
+
+## 客户端建议
+
+1. **倒计时显示**
+   - 建议在客户端实现实时倒计时显示
+   - 可参考以下JavaScript代码实现倒计时：
+
+```javascript
+function updateCountdown(expirationTime) {
+    const now = new Date();
+    const expiration = new Date(expirationTime);
+    
+    if (now >= expiration) {
+        return '已过期';
+    }
+    
+    const remainingTime = expiration - now;
+    const hours = Math.floor(remainingTime / (1000 * 60 * 60));
+    const minutes = Math.floor((remainingTime % (1000 * 60 * 60)) / (1000 * 60));
+    const seconds = Math.floor((remainingTime % (1000 * 60)) / 1000);
+    
+    return `${hours}时${minutes}分${seconds}秒`;
+}
+
+// 使用示例
+setInterval(() => {
+    const countdown = updateCountdown(expirationTime);
+    document.getElementById('countdown').textContent = countdown;
+}, 1000);
+```
+
+2. **状态更新**
+   - 定期检查卡密状态（建议30秒-1分钟间隔）
+   - 实现优雅的过期处理
+   - 注意处理设备识别相关的错误 

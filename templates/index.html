@@ -14,6 +14,16 @@
         .card-item {
             margin-bottom: 10px;
         }
+        .copy-btn {
+            cursor: pointer;
+        }
+        .copy-btn:hover {
+            color: #0d6efd;
+        }
+        .countdown {
+            font-size: 0.9em;
+            color: #6c757d;
+        }
     </style>
 </head>
 <body>
@@ -56,20 +66,35 @@
                                 <th>时长（分钟）</th>
                                 <th>创建时间</th>
                                 <th>状态</th>
+                                <th>剩余时间</th>
                                 <th>操作</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for card in cards %}
                             <tr>
-                                <td><code>{{ card.card_key }}</code></td>
+                                <td>
+                                    <code>{{ card.card_key }}</code>
+                                    <i class="copy-btn bi bi-clipboard ms-2" onclick="copyToClipboard('{{ card.card_key }}')" title="复制卡密"></i>
+                                </td>
                                 <td>{{ card.minutes }}</td>
                                 <td>{{ card.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
                                 <td>
-                                    {% if card.is_used %}
-                                        <span class="badge bg-danger">已使用</span>
-                                    {% else %}
+                                    {% if not card.is_used %}
                                         <span class="badge bg-success">未使用</span>
+                                    {% elif card.is_used and card.used_at %}
+                                        <span class="badge bg-warning" id="status-{{ card.id }}" 
+                                              data-used-at="{{ card.used_at.isoformat() }}"
+                                              data-minutes="{{ card.minutes }}">使用中</span>
+                                    {% else %}
+                                        <span class="badge bg-danger">已过期</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if card.is_used and card.used_at %}
+                                        <span class="countdown" id="countdown-{{ card.id }}">计算中...</span>
+                                    {% else %}
+                                        -
                                     {% endif %}
                                 </td>
                                 <td>
@@ -87,5 +112,50 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css">
+    
+    <script>
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                alert('卡密已复制到剪贴板！');
+            }).catch(err => {
+                console.error('复制失败:', err);
+                alert('复制失败，请手动复制');
+            });
+        }
+
+        function updateCountdown() {
+            const now = new Date();
+            document.querySelectorAll('[id^="status-"]').forEach(statusElement => {
+                const id = statusElement.id.split('-')[1];
+                const usedAt = new Date(statusElement.dataset.usedAt);
+                const minutes = parseInt(statusElement.dataset.minutes);
+                const expirationTime = new Date(usedAt.getTime() + minutes * 60000);
+                const countdownElement = document.getElementById(`countdown-${id}`);
+                
+                if (now >= expirationTime) {
+                    statusElement.className = 'badge bg-danger';
+                    statusElement.textContent = '已过期';
+                    if (countdownElement) {
+                        countdownElement.textContent = '已过期';
+                    }
+                } else {
+                    const remainingTime = expirationTime - now;
+                    const remainingHours = Math.floor(remainingTime / (1000 * 60 * 60));
+                    const remainingMinutes = Math.floor((remainingTime % (1000 * 60 * 60)) / (1000 * 60));
+                    const remainingSeconds = Math.floor((remainingTime % (1000 * 60)) / 1000);
+                    
+                    if (countdownElement) {
+                        countdownElement.textContent = `${remainingHours}时${remainingMinutes}分${remainingSeconds}秒`;
+                    }
+                }
+            });
+        }
+
+        // 每秒更新倒计时
+        setInterval(updateCountdown, 1000);
+        // 页面加载时立即更新一次
+        updateCountdown();
+    </script>
 </body>
 </html> 

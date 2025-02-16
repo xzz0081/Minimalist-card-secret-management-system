@@ -77,11 +77,20 @@ class Card(db.Model):
             'id': self.id,
             'card_key': self.card_key,
             'minutes': self.minutes,
-            'created_at': self.created_at.isoformat(),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
             'is_used': self.is_used,
             'used_at': self.used_at.isoformat() if self.used_at else None,
-            'device_id': self.device_id
+            'device_id': self.device_id,
+            'remaining_minutes': self._calculate_remaining_minutes()
         }
+    
+    def _calculate_remaining_minutes(self):
+        if not self.is_used or not self.used_at:
+            return self.minutes
+        expiration_time = self.used_at + timedelta(minutes=self.minutes)
+        if datetime.utcnow() >= expiration_time:
+            return 0
+        return int((expiration_time - datetime.utcnow()).total_seconds() / 60)
 
 @app.route('/')
 def index():
