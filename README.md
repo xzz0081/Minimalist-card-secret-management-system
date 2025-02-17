@@ -94,8 +94,8 @@ python app.py
 
 如有任何问题、建议或合作意向，请：
 - 提交 GitHub Issues
-- 发送邮件到：your_email@example.com
-- 加入我们的技术交流群
+
+- 加入我们的技术交流群  电报 https://t.me/handou8808
 
 ## 项目状态
 
