@@ -3,5 +3,5 @@
     "rate_limit_requests": 60,
     "rate_limit_window": 60,
     "site_name": "超级变态卡密管理系统",
-    "api_enabled": false
+    "api_enabled": true
 }

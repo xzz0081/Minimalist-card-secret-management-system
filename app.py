@@ -11,6 +11,7 @@ import json
 import csv
 from io import StringIO
 import logging
+import threading
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = secrets.token_hex(16)
@@ -41,31 +42,35 @@ class RateLimit:
     def __init__(self):
         self.requests = {}
         self.last_cleanup = time.time()
+        self._lock = threading.Lock()  # 添加线程锁
 
     def is_allowed(self, ip):
         """检查IP是否允许请求"""
-        now = time.time()
-        
-        # 清理过期的请求记录
-        if now - self.last_cleanup > 60:
-            self._cleanup(now)
-        
-        # 获取IP的请求记录
-        if ip not in self.requests:
-            self.requests[ip] = []
-        
-        # 获取配置的限制
-        window = settings.get('rate_limit_window', 60)
-        max_requests = settings.get('rate_limit_requests', 60)
-        
-        # 添加新请求
-        self.requests[ip].append(now)
-        
-        # 检查是否超过限制
-        recent_requests = [t for t in self.requests[ip] if now - t < window]
-        self.requests[ip] = recent_requests
-        
-        return len(recent_requests) <= max_requests
+        with self._lock:  # 使用线程锁保护并发访问
+            now = time.time()
+            
+            # 清理过期的请求记录
+            if now - self.last_cleanup > 60:
+                self._cleanup(now)
+            
+            # 获取IP的请求记录
+            if ip not in self.requests:
+                self.requests[ip] = []
+            
+            # 获取配置的限制
+            window = settings.get('rate_limit_window', 60)
+            max_requests = settings.get('rate_limit_requests', 60)
+            
+            # 清理当前IP的过期请求
+            self.requests[ip] = [t for t in self.requests[ip] if now - t < window]
+            
+            # 检查是否超过限制
+            if len(self.requests[ip]) >= max_requests:
+                return False
+            
+            # 添加新请求
+            self.requests[ip].append(now)
+            return True
 
     def _cleanup(self, now):
         """清理过期的请求记录"""
@@ -81,10 +86,17 @@ rate_limiter = RateLimit()
 def rate_limit(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # 检查API是否启用
+        if not settings.get('api_enabled', True):
+            return jsonify({
+                'valid': False,
+                'message': 'API接口已关闭'
+            }), 403
+            
         if not rate_limiter.is_allowed(request.remote_addr):
             return jsonify({
                 'valid': False,
-                'message': '请求过于频繁，请稍后再试'
+                'message': f'请求过于频繁，请在{settings.get("rate_limit_window", 60)}秒后再试'
             }), 429
         return f(*args, **kwargs)
     return decorated_function
