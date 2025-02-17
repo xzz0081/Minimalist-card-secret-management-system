@@ -45,12 +45,75 @@
         <div class="card mb-4">
             <div class="card-body">
                 <h5 class="card-title">添加新卡密</h5>
-                <form action="{{ url_for('add_card') }}" method="POST" class="row g-3">
-                    <div class="col-auto">
-                        <input type="number" class="form-control" name="minutes" placeholder="有效时间（分钟）" required>
+                <div class="row">
+                    <div class="col-md-6">
+                        <form action="{{ url_for('add_card') }}" method="POST" class="row g-3">
+                            <div class="col-auto">
+                                <input type="number" class="form-control" name="minutes" placeholder="有效时间（分钟）" required>
+                            </div>
+                            <div class="col-auto">
+                                <button type="submit" class="btn btn-primary">生成单个卡密</button>
+                            </div>
+                        </form>
                     </div>
-                    <div class="col-auto">
-                        <button type="submit" class="btn btn-primary">生成卡密</button>
+                    <div class="col-md-6">
+                        <form action="{{ url_for('add_bulk_cards') }}" method="POST" class="row g-3">
+                            <div class="col-auto">
+                                <input type="number" class="form-control" name="minutes" placeholder="有效时间（分钟）" required>
+                            </div>
+                            <div class="col-auto">
+                                <input type="number" class="form-control" name="count" placeholder="生成数量" required>
+                            </div>
+                            <div class="col-auto">
+                                <button type="submit" class="btn btn-primary">批量生成</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 导入导出 -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">导入导出</h5>
+                <div class="row">
+                    <div class="col-md-6">
+                        <form action="{{ url_for('import_cards') }}" method="POST" enctype="multipart/form-data" class="row g-3">
+                            <div class="col-auto">
+                                <input type="file" class="form-control" name="file" accept=".csv" required>
+                            </div>
+                            <div class="col-auto">
+                                <button type="submit" class="btn btn-primary">导入CSV</button>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="col-md-6">
+                        <a href="{{ url_for('export_cards') }}" class="btn btn-primary">导出CSV</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 搜索和筛选 -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">搜索和筛选</h5>
+                <form action="{{ url_for('index') }}" method="GET" class="row g-3">
+                    <div class="col-md-4">
+                        <input type="text" class="form-control" name="search" placeholder="搜索卡密" value="{{ search }}">
+                    </div>
+                    <div class="col-md-4">
+                        <select class="form-select" name="status">
+                            <option value="">全部状态</option>
+                            <option value="unused" {% if status == 'unused' %}selected{% endif %}>未使用</option>
+                            <option value="used" {% if status == 'used' %}selected{% endif %}>使用中</option>
+                            <option value="expired" {% if status == 'expired' %}selected{% endif %}>已过期</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <button type="submit" class="btn btn-primary">搜索</button>
+                        <a href="{{ url_for('index') }}" class="btn btn-secondary">重置</a>
                     </div>
                 </form>
             </div>
@@ -118,6 +181,35 @@
                         </tbody>
                     </table>
                 </div>
+
+                <!-- 分页 -->
+                {% if pagination.pages > 1 %}
+                <nav aria-label="Page navigation" class="mt-4">
+                    <ul class="pagination justify-content-center">
+                        {% if pagination.has_prev %}
+                            <li class="page-item">
+                                <a class="page-link" href="{{ url_for('index', page=pagination.prev_num, status=status, search=search) }}">上一页</a>
+                            </li>
+                        {% endif %}
+                        
+                        {% for page in pagination.iter_pages() %}
+                            {% if page %}
+                                <li class="page-item {% if page == pagination.page %}active{% endif %}">
+                                    <a class="page-link" href="{{ url_for('index', page=page, status=status, search=search) }}">{{ page }}</a>
+                                </li>
+                            {% else %}
+                                <li class="page-item disabled"><span class="page-link">...</span></li>
+                            {% endif %}
+                        {% endfor %}
+                        
+                        {% if pagination.has_next %}
+                            <li class="page-item">
+                                <a class="page-link" href="{{ url_for('index', page=pagination.next_num, status=status, search=search) }}">下一页</a>
+                            </li>
+                        {% endif %}
+                    </ul>
+                </nav>
+                {% endif %}
             </div>
         </div>
     </div>

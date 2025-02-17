@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify, redirect, url_for, send_file
 from flask_sqlalchemy import SQLAlchemy
 from flask_socketio import SocketIO, emit
 from datetime import datetime, timedelta
@@ -8,6 +8,8 @@ from functools import wraps
 import time
 import hashlib
 import json
+import csv
+from io import StringIO
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = secrets.token_hex(16)
@@ -75,6 +77,47 @@ class Card(db.Model):
     used_at = db.Column(db.DateTime, nullable=True)
     device_id = db.Column(db.String(32), nullable=True)
 
+    @classmethod
+    def generate_bulk_cards(cls, minutes, count):
+        """批量生成卡密"""
+        cards = []
+        for _ in range(count):
+            card_key = secrets.token_hex(16)
+            cards.append(cls(card_key=card_key, minutes=minutes))
+        return cards
+
+    @classmethod
+    def export_to_csv(cls, cards):
+        """导出卡密到CSV格式"""
+        csv_data = []
+        headers = ['卡密', '时长(分钟)', '创建时间', '状态', '使用时间', '剩余时间']
+        csv_data.append(headers)
+        
+        for card in cards:
+            status = '未使用' if not card.is_used else '使用中' if card._calculate_remaining_minutes() > 0 else '已过期'
+            row = [
+                card.card_key,
+                str(card.minutes),
+                card.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                status,
+                card.used_at.strftime('%Y-%m-%d %H:%M:%S') if card.used_at else '',
+                str(card._calculate_remaining_minutes())
+            ]
+            csv_data.append(row)
+        return csv_data
+
+    @classmethod
+    def import_from_csv(cls, csv_data):
+        """从CSV导入卡密"""
+        imported_cards = []
+        for row in csv_data[1:]:  # Skip header row
+            if len(row) >= 2:  # At least card_key and minutes are required
+                card_key, minutes = row[0], int(row[1])
+                if not cls.query.filter_by(card_key=card_key).first():
+                    card = cls(card_key=card_key, minutes=minutes)
+                    imported_cards.append(card)
+        return imported_cards
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -107,8 +150,42 @@ def broadcast_card_update():
 @app.route('/')
 def index():
     try:
-        cards = Card.query.all()
-        return render_template('index.html', cards=cards)
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 10, type=int)
+        status = request.args.get('status')
+        search = request.args.get('search', '').strip()
+        
+        # 构建查询
+        query = Card.query
+        
+        # 应用过滤条件
+        if status:
+            if status == 'unused':
+                query = query.filter_by(is_used=False)
+            elif status == 'used':
+                query = query.filter_by(is_used=True)
+            elif status == 'expired':
+                query = query.filter(
+                    Card.is_used == True,
+                    Card.used_at <= datetime.now() - timedelta(minutes=Card.minutes)
+                )
+        
+        # 应用搜索条件
+        if search:
+            query = query.filter(Card.card_key.like(f'%{search}%'))
+        
+        # 应用排序
+        query = query.order_by(Card.created_at.desc())
+        
+        # 执行分页
+        pagination = query.paginate(page=page, per_page=per_page)
+        cards = pagination.items
+        
+        return render_template('index.html', 
+                             cards=cards, 
+                             pagination=pagination,
+                             status=status,
+                             search=search)
     except Exception as e:
         app.logger.error(f"访问首页出错: {str(e)}")
         return render_template('index.html', cards=[], error="获取卡密列表失败")
@@ -217,6 +294,88 @@ def verify_card():
             'valid': False,
             'message': '服务器内部错误'
         }), 500
+
+@app.route('/add_bulk_cards', methods=['POST'])
+def add_bulk_cards():
+    try:
+        minutes = request.form.get('minutes', type=int)
+        count = request.form.get('count', type=int)
+        
+        if not minutes or minutes <= 0 or not count or count <= 0:
+            return jsonify({'error': '无效的参数'}), 400
+        
+        cards = Card.generate_bulk_cards(minutes, count)
+        db.session.bulk_save_objects(cards)
+        db.session.commit()
+        
+        # 广播更新
+        broadcast_card_update()
+        return redirect(url_for('index'))
+    except Exception as e:
+        app.logger.error(f"批量添加卡密出错: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': '批量添加卡密失败'}), 500
+
+@app.route('/export_cards')
+def export_cards():
+    try:
+        # 获取所有卡密
+        cards = Card.query.all()
+        
+        # 生成CSV数据
+        csv_data = Card.export_to_csv(cards)
+        
+        # 创建CSV字符串
+        si = StringIO()
+        writer = csv.writer(si)
+        writer.writerows(csv_data)
+        
+        # 创建响应
+        output = si.getvalue()
+        si.close()
+        
+        return send_file(
+            StringIO(output),
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name=f'cards_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+        )
+    except Exception as e:
+        app.logger.error(f"导出卡密出错: {str(e)}")
+        return jsonify({'error': '导出卡密失败'}), 500
+
+@app.route('/import_cards', methods=['POST'])
+def import_cards():
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': '没有上传文件'}), 400
+            
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': '没有选择文件'}), 400
+            
+        if not file.filename.endswith('.csv'):
+            return jsonify({'error': '只支持CSV文件'}), 400
+        
+        # 读取CSV文件
+        stream = StringIO(file.stream.read().decode("UTF8"), newline=None)
+        csv_data = list(csv.reader(stream))
+        
+        # 导入卡密
+        cards = Card.import_from_csv(csv_data)
+        if not cards:
+            return jsonify({'error': '没有有效的卡密数据可导入'}), 400
+            
+        db.session.bulk_save_objects(cards)
+        db.session.commit()
+        
+        # 广播更新
+        broadcast_card_update()
+        return redirect(url_for('index'))
+    except Exception as e:
+        app.logger.error(f"导入卡密出错: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': '导入卡密失败'}), 500
 
 @app.errorhandler(404)
 def not_found_error(error):
