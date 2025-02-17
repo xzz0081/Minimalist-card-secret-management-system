@@ -337,11 +337,30 @@ def index():
         status = request.args.get('status')
         search = request.args.get('search', '').strip()
         
+        # 获取各状态的卡密数量
+        current_time = datetime.now()
+        unused_count = Card.query.filter_by(is_used=False).count()
+        
+        # 使用中的卡密数量
+        used_cards = Card.query.filter(
+            Card.is_used == True,
+            Card.used_at != None
+        ).all()
+        used_count = sum(
+            1 for card in used_cards
+            if card.used_at + timedelta(minutes=card.minutes) > current_time
+        )
+        
+        # 已过期的卡密数量
+        expired_count = sum(
+            1 for card in used_cards
+            if card.used_at + timedelta(minutes=card.minutes) <= current_time
+        )
+        
         # 构建查询
         query = Card.query
         
         # 应用过滤条件
-        current_time = datetime.now()
         if status:
             if status == 'unused':
                 query = query.filter_by(is_used=False)
@@ -388,6 +407,9 @@ def index():
                              pagination=pagination,
                              status=status,
                              search=search,
+                             unused_count=unused_count,
+                             used_count=used_count,
+                             expired_count=expired_count,
                              settings=settings.settings)
     except Exception as e:
         logger.error(f"访问首页出错: {str(e)}", exc_info=True)
@@ -396,6 +418,9 @@ def index():
                              pagination=None,
                              status=status,
                              search=search,
+                             unused_count=0,
+                             used_count=0,
+                             expired_count=0,
                              error="获取卡密列表失败",
                              settings=settings.settings)
 

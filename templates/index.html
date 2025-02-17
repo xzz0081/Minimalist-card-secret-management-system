@@ -14,17 +14,12 @@
         </div>
     </div>
     <div class="toolbar-item flex-grow-1">
-        <form action="{{ url_for('index') }}" method="GET" class="d-flex gap-2">
+        <form action="{{ url_for('index') }}" method="GET" class="d-flex gap-2" id="searchForm">
             <div class="input-group">
                 <span class="input-group-text"><i class="bi bi-search"></i></span>
                 <input type="text" class="form-control" name="search" placeholder="搜索卡密" value="{{ search }}">
             </div>
-            <select class="form-select" name="status" style="width: auto;">
-                <option value="">全部状态</option>
-                <option value="unused" {% if status == 'unused' %}selected{% endif %}>未使用</option>
-                <option value="used" {% if status == 'used' %}selected{% endif %}>使用中</option>
-                <option value="expired" {% if status == 'expired' %}selected{% endif %}>已过期</option>
-            </select>
+            <input type="hidden" name="status" id="statusFilter" value="{{ status }}">
             <button type="submit" class="btn btn-primary">搜索</button>
         </form>
     </div>
@@ -34,6 +29,24 @@
         </a>
         <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#importCardsModal">
             <i class="bi bi-upload"></i> 导入
+        </button>
+    </div>
+</div>
+
+<!-- 状态筛选器 -->
+<div class="status-filter mb-3">
+    <div class="btn-group">
+        <button type="button" class="btn btn-outline-secondary {% if not status %}active{% endif %}" onclick="filterStatus('')">
+            全部
+        </button>
+        <button type="button" class="btn btn-outline-secondary {% if status == 'unused' %}active{% endif %}" onclick="filterStatus('unused')">
+            <span class="badge bg-secondary me-1">{{ unused_count }}</span>未使用
+        </button>
+        <button type="button" class="btn btn-outline-secondary {% if status == 'used' %}active{% endif %}" onclick="filterStatus('used')">
+            <span class="badge bg-success me-1">{{ used_count }}</span>使用中
+        </button>
+        <button type="button" class="btn btn-outline-secondary {% if status == 'expired' %}active{% endif %}" onclick="filterStatus('expired')">
+            <span class="badge bg-danger me-1">{{ expired_count }}</span>已过期
         </button>
     </div>
 </div>
@@ -62,7 +75,14 @@
                 {% if cards %}
                     {% for card in cards %}
                     <tr>
-                        <td><code class="bg-light px-2 py-1">{{ card.card_key }}</code></td>
+                        <td>
+                            <div class="d-flex align-items-center gap-2">
+                                <code class="bg-light px-2 py-1">{{ card.card_key }}</code>
+                                <button type="button" class="btn btn-sm btn-link p-0" onclick="copyToClipboard('{{ card.card_key }}')" title="复制卡密">
+                                    <i class="bi bi-clipboard"></i>
+                                </button>
+                            </div>
+                        </td>
                         <td>{{ card.minutes }}分钟</td>
                         <td>{{ card.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
                         <td>
@@ -301,12 +321,43 @@
         });
     }
 
+    function filterStatus(status) {
+        document.getElementById('statusFilter').value = status;
+        document.getElementById('searchForm').submit();
+    }
+
     function copyToClipboard(text) {
         navigator.clipboard.writeText(text).then(() => {
-            showToast('卡密已复制到剪贴板');
+            // 创建一个临时的toast提示
+            const toast = document.createElement('div');
+            toast.className = 'toast align-items-center text-white bg-success border-0 position-fixed bottom-0 end-0 m-3';
+            toast.setAttribute('role', 'alert');
+            toast.setAttribute('aria-live', 'assertive');
+            toast.setAttribute('aria-atomic', 'true');
+            toast.innerHTML = `
+                <div class="d-flex">
+                    <div class="toast-body">
+                        卡密已复制到剪贴板
+                    </div>
+                    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+                </div>
+            `;
+            document.body.appendChild(toast);
+            
+            const bsToast = new bootstrap.Toast(toast, {
+                animation: true,
+                autohide: true,
+                delay: 2000
+            });
+            bsToast.show();
+            
+            // 监听隐藏事件，移除DOM元素
+            toast.addEventListener('hidden.bs.toast', () => {
+                document.body.removeChild(toast);
+            });
         }).catch(err => {
             console.error('复制失败:', err);
-            showToast('复制失败，请手动复制');
+            alert('复制失败，请手动复制');
         });
     }
 
