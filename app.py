@@ -110,6 +110,7 @@ def get_local_time():
 class Card(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     card_key = db.Column(db.String(32), unique=True, nullable=False)
+    remark = db.Column(db.String(255), nullable=True, default="")
     minutes = db.Column(db.Integer, nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=get_local_time)
     is_used = db.Column(db.Boolean, default=False)
@@ -149,7 +150,7 @@ class Card(db.Model):
     def export_to_csv(cls, cards):
         """导出卡密到CSV格式"""
         csv_data = []
-        headers = ['卡密', '时长(分钟)', '创建时间', '状态', '首次使用时间', '剩余时间', '最大设备数', '已用设备数']
+        headers = ['卡密', '备注', '时长(分钟)', '创建时间', '状态', '首次使用时间', '剩余时间', '最大设备数', '已用设备数']
         csv_data.append(headers)
         
         for card in cards:
@@ -158,6 +159,7 @@ class Card(db.Model):
             device_count = len(card.get_devices()) if card.device_id else 0
             row = [
                 card.card_key,
+                card.remark if card.remark else '',
                 str(card.minutes),
                 card.created_at.strftime('%Y-%m-%d %H:%M:%S'),
                 status,
@@ -240,6 +242,7 @@ class Card(db.Model):
         return {
             'id': self.id,
             'card_key': self.card_key,
+            'remark': self.remark if self.remark else '',
             'minutes': self.minutes,
             'is_used': self.is_used,
             'used_at': self.used_at.isoformat() if self.used_at else None,
