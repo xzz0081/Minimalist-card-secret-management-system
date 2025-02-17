@@ -1,11 +1,13 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
+from flask_socketio import SocketIO, emit
 from datetime import datetime, timedelta
 import secrets
 import os
 from functools import wraps
 import time
 import hashlib
+import json
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = secrets.token_hex(16)
@@ -18,6 +20,7 @@ app.config['RATELIMIT_STRATEGY'] = 'fixed-window'
 app.config['RATELIMIT_DEFAULT'] = "60/minute"
 
 db = SQLAlchemy(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 def generate_device_id(request):
     """根据请求信息生成设备ID"""
@@ -92,6 +95,15 @@ class Card(db.Model):
             return 0
         return int((expiration_time - datetime.now()).total_seconds() / 60)
 
+def broadcast_card_update():
+    """广播卡密更新"""
+    try:
+        cards = Card.query.all()
+        card_list = [card.to_dict() for card in cards]
+        socketio.emit('cards_update', {'cards': card_list})
+    except Exception as e:
+        app.logger.error(f"广播卡密更新出错: {str(e)}")
+
 @app.route('/')
 def index():
     try:
@@ -112,6 +124,9 @@ def add_card():
         card = Card(card_key=card_key, minutes=minutes)
         db.session.add(card)
         db.session.commit()
+        
+        # 广播更新
+        broadcast_card_update()
         return redirect(url_for('index'))
     except Exception as e:
         app.logger.error(f"添加卡密出错: {str(e)}")
@@ -124,6 +139,9 @@ def delete_card(card_id):
         card = Card.query.get_or_404(card_id)
         db.session.delete(card)
         db.session.commit()
+        
+        # 广播更新
+        broadcast_card_update()
         return redirect(url_for('index'))
     except Exception as e:
         app.logger.error(f"删除卡密出错: {str(e)}")
@@ -151,40 +169,47 @@ def verify_card():
                 'message': '卡密不存在'
             }), 404
         
+        response_data = None
         if card.is_used:
             # 检查设备是否匹配
             if card.device_id and card.device_id != current_device_id:
-                return jsonify({
+                response_data = {
                     'valid': False,
                     'message': '该卡密已被其他设备使用'
-                }), 403
+                }
+                return jsonify(response_data), 403
                 
             remaining_minutes = 0
             if card.used_at:
                 expiration_time = card.used_at + timedelta(minutes=card.minutes)
                 if datetime.now() < expiration_time:
                     remaining_minutes = int((expiration_time - datetime.now()).total_seconds() / 60)
-                return jsonify({
+                response_data = {
                     'valid': remaining_minutes > 0,
                     'remaining_minutes': remaining_minutes,
                     'message': '卡密有效' if remaining_minutes > 0 else '卡密已过期'
-                })
-            return jsonify({
-                'valid': False,
-                'message': '卡密已过期'
-            })
+                }
+            else:
+                response_data = {
+                    'valid': False,
+                    'message': '卡密已过期'
+                }
+        else:
+            # 首次使用卡密
+            card.is_used = True
+            card.used_at = datetime.now()
+            card.device_id = current_device_id
+            db.session.commit()
+            
+            response_data = {
+                'valid': True,
+                'remaining_minutes': card.minutes,
+                'message': '卡密首次使用成功'
+            }
         
-        # 首次使用卡密
-        card.is_used = True
-        card.used_at = datetime.now()
-        card.device_id = current_device_id
-        db.session.commit()
-        
-        return jsonify({
-            'valid': True,
-            'remaining_minutes': card.minutes,
-            'message': '卡密首次使用成功'
-        })
+        # 广播更新
+        broadcast_card_update()
+        return jsonify(response_data)
     except Exception as e:
         app.logger.error(f"验证卡密出错: {str(e)}")
         db.session.rollback()
@@ -205,4 +230,4 @@ def internal_error(error):
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(host='0.0.0.0', port=8888, debug=False)
+    socketio.run(app, host='0.0.0.0', port=8888, debug=False)
