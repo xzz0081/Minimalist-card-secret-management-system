@@ -10,11 +10,17 @@ import hashlib
 import json
 import csv
 from io import StringIO
+import logging
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = secrets.token_hex(16)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///cards.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['DEBUG'] = True  # 启用调试模式
+
+# 配置日志
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # 添加请求频率限制配置
 app.config['RATELIMIT_STORAGE_URL'] = 'memory://'
@@ -30,30 +36,45 @@ def generate_device_id(request):
     device_info = f"{request.user_agent.string}|{request.remote_addr}"
     return hashlib.md5(device_info.encode()).hexdigest()
 
-# 简单的内存请求限制实现
 class RateLimit:
-    def __init__(self, requests=60, window=60):
-        self.requests = requests
-        self.window = window
-        self.tokens = {}
-    
-    def is_allowed(self, key):
+    """请求频率限制实现"""
+    def __init__(self):
+        self.requests = {}
+        self.last_cleanup = time.time()
+
+    def is_allowed(self, ip):
+        """检查IP是否允许请求"""
         now = time.time()
-        self.cleanup(now)
         
-        if key not in self.tokens:
-            self.tokens[key] = []
+        # 清理过期的请求记录
+        if now - self.last_cleanup > 60:
+            self._cleanup(now)
         
-        self.tokens[key].append(now)
+        # 获取IP的请求记录
+        if ip not in self.requests:
+            self.requests[ip] = []
         
-        return len(self.tokens[key]) <= self.requests
-    
-    def cleanup(self, now):
-        min_time = now - self.window
-        for key in list(self.tokens.keys()):
-            self.tokens[key] = [t for t in self.tokens[key] if t > min_time]
-            if not self.tokens[key]:
-                del self.tokens[key]
+        # 获取配置的限制
+        window = settings.get('rate_limit_window', 60)
+        max_requests = settings.get('rate_limit_requests', 60)
+        
+        # 添加新请求
+        self.requests[ip].append(now)
+        
+        # 检查是否超过限制
+        recent_requests = [t for t in self.requests[ip] if now - t < window]
+        self.requests[ip] = recent_requests
+        
+        return len(recent_requests) <= max_requests
+
+    def _cleanup(self, now):
+        """清理过期的请求记录"""
+        window = settings.get('rate_limit_window', 60)
+        for ip in list(self.requests.keys()):
+            self.requests[ip] = [t for t in self.requests[ip] if now - t < window]
+            if not self.requests[ip]:
+                del self.requests[ip]
+        self.last_cleanup = now
 
 rate_limiter = RateLimit()
 
@@ -147,11 +168,51 @@ def broadcast_card_update():
     except Exception as e:
         app.logger.error(f"广播卡密更新出错: {str(e)}")
 
+class Settings:
+    def __init__(self):
+        self.config_file = 'config.json'
+        self.default_settings = {
+            'per_page': 10,
+            'rate_limit_requests': 60,
+            'rate_limit_window': 60,
+            'site_name': '卡密管理系统',
+            'api_enabled': True
+        }
+        self.load()
+
+    def load(self):
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    self.settings = json.load(f)
+            else:
+                self.settings = self.default_settings
+                self.save()
+        except Exception as e:
+            app.logger.error(f"加载配置出错: {str(e)}")
+            self.settings = self.default_settings
+
+    def save(self):
+        try:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.settings, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            app.logger.error(f"保存配置出错: {str(e)}")
+
+    def get(self, key, default=None):
+        return self.settings.get(key, default)
+
+    def set(self, key, value):
+        self.settings[key] = value
+        self.save()
+
+settings = Settings()
+
 @app.route('/')
 def index():
     try:
         page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 10, type=int)
+        per_page = settings.get('per_page', 10)
         status = request.args.get('status')
         search = request.args.get('search', '').strip()
         
@@ -185,10 +246,14 @@ def index():
                              cards=cards, 
                              pagination=pagination,
                              status=status,
-                             search=search)
+                             search=search,
+                             settings=settings.settings)
     except Exception as e:
-        app.logger.error(f"访问首页出错: {str(e)}")
-        return render_template('index.html', cards=[], error="获取卡密列表失败")
+        logger.error(f"访问首页出错: {str(e)}")
+        return render_template('index.html', 
+                             cards=[], 
+                             error="获取卡密列表失败",
+                             settings=settings.settings)
 
 @app.route('/add_card', methods=['POST'])
 def add_card():
@@ -377,14 +442,47 @@ def import_cards():
         db.session.rollback()
         return jsonify({'error': '导入卡密失败'}), 500
 
+@app.route('/settings')
+def settings_page():
+    return render_template('settings.html', settings=settings.settings)
+
+@app.route('/settings/update', methods=['POST'])
+def update_settings():
+    """更新系统设置"""
+    try:
+        # 获取表单数据
+        site_name = request.form.get('site_name')
+        per_page = request.form.get('per_page', type=int)
+        rate_limit_requests = request.form.get('rate_limit_requests', type=int)
+        rate_limit_window = request.form.get('rate_limit_window', type=int)
+        api_enabled = request.form.get('api_enabled') == 'on'
+
+        # 验证数据
+        if not site_name or per_page <= 0 or rate_limit_requests <= 0 or rate_limit_window <= 0:
+            return jsonify({'error': '无效的设置参数'}), 400
+
+        # 更新设置
+        settings.settings.update({
+            'site_name': site_name,
+            'per_page': per_page,
+            'rate_limit_requests': rate_limit_requests,
+            'rate_limit_window': rate_limit_window,
+            'api_enabled': api_enabled
+        })
+        settings.save()
+
+        return jsonify({'message': '设置已更新'})
+    except Exception as e:
+        app.logger.error(f"更新设置出错: {str(e)}")
+        return jsonify({'error': '更新设置失败'}), 500
+
 @app.errorhandler(404)
 def not_found_error(error):
-    return jsonify({'error': '请求的资源不存在'}), 404
+    return render_template('404.html', settings=settings.settings), 404
 
 @app.errorhandler(500)
 def internal_error(error):
-    db.session.rollback()
-    return jsonify({'error': '服务器内部错误'}), 500
+    return render_template('500.html', settings=settings.settings), 500
 
 if __name__ == '__main__':
     with app.app_context():
