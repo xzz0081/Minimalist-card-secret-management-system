@@ -24,11 +24,12 @@
         <table class="table table-hover">
             <thead>
                 <tr>
-                    <th style="width: 20%">操作时间</th>
-                    <th style="width: 15%">操作类型</th>
-                    <th style="width: 35%">卡密</th>
-                    <th style="width: 15%">操作结果</th>
-                    <th style="width: 15%">操作IP</th>
+                    <th style="width: 15%">操作时间</th>
+                    <th style="width: 12%">操作类型</th>
+                    <th style="width: 25%">卡密</th>
+                    <th style="width: 10%">操作结果</th>
+                    <th style="width: 13%">操作IP</th>
+                    <th style="width: 25%">设备ID</th>
                 </tr>
             </thead>
             <tbody>
@@ -47,8 +48,6 @@
                                 导入卡密
                             {% elif log.path == '/export_cards' %}
                                 导出卡密
-                            {% else %}
-                                其他操作
                             {% endif %}
                         </td>
                         <td>
@@ -67,11 +66,14 @@
                             </span>
                         </td>
                         <td>{{ log.ip_address }}</td>
+                        <td>
+                            <code class="bg-light px-2 py-1">{{ log.device_id }}</code>
+                        </td>
                     </tr>
                     {% endfor %}
                 {% else %}
                     <tr>
-                        <td colspan="5" class="text-center py-4">
+                        <td colspan="6" class="text-center py-4">
                             {% if error %}
                                 <div class="text-danger">{{ error }}</div>
                             {% else %}

@@ -248,16 +248,17 @@ class AccessLog(db.Model):
 @app.before_request
 def log_request():
     try:
-        # 只记录与卡密相关的操作
-        card_related_paths = [
-            '/api/verify_card',
-            '/add_card',
-            '/delete_card',
-            '/import_cards',
-            '/export_cards'
-        ]
+        # 定义允许记录日志的路径和对应的操作类型
+        card_operations = {
+            '/api/verify_card': '验证卡密',
+            '/add_card': '添加卡密',
+            '/delete_card': '删除卡密',
+            '/import_cards': '导入卡密',
+            '/export_cards': '导出卡密'
+        }
         
-        if any(request.path.startswith(path) for path in card_related_paths):
+        # 只记录定义的卡密操作
+        if request.path in card_operations:
             device_id = generate_device_id(request)
             # 获取请求中的卡密信息
             card_key = None
@@ -265,6 +266,15 @@ def log_request():
                 card_key = request.get_json().get('card_key')
             elif request.form and 'card_key' in request.form:
                 card_key = request.form.get('card_key')
+            elif '/delete_card/' in request.path:
+                # 对于删除操作，从路径中提取卡密ID并查找对应的卡密
+                try:
+                    card_id = int(request.path.split('/')[-1])
+                    card = Card.query.get(card_id)
+                    if card:
+                        card_key = card.card_key
+                except (ValueError, AttributeError):
+                    pass
             
             log = AccessLog(
                 ip_address=request.remote_addr,
