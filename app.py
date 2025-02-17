@@ -790,6 +790,31 @@ def view_logs():
                              error="获取日志列表失败",
                              settings=settings.settings)
 
+@app.route('/update_remark', methods=['POST'])
+def update_remark():
+    try:
+        card_id = request.form.get('card_id', type=int)
+        remark = request.form.get('remark', '').strip()
+        
+        if not card_id:
+            return jsonify({'error': '缺少卡密ID'}), 400
+            
+        card = Card.query.get(card_id)
+        if not card:
+            return jsonify({'error': '卡密不存在'}), 404
+            
+        card.remark = remark
+        db.session.commit()
+        
+        # 广播更新
+        broadcast_card_update()
+        
+        return jsonify({'message': '备注更新成功'})
+    except Exception as e:
+        app.logger.error(f"更新备注出错: {str(e)}")
+        db.session.rollback()
+        return jsonify({'error': '更新备注失败'}), 500
+
 @app.errorhandler(404)
 def not_found_error(error):
     return render_template('404.html', settings=settings.settings), 404

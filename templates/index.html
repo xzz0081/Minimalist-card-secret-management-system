@@ -76,11 +76,19 @@
                     {% for card in cards %}
                     <tr data-card-id="{{ card.id }}">
                         <td>
-                            <div class="d-flex align-items-center gap-2">
-                                <code class="bg-light px-2 py-1">{{ card.card_key }}</code>
-                                <button type="button" class="btn btn-sm btn-link p-0" onclick="copyToClipboard('{{ card.card_key }}')" title="复制卡密">
-                                    <i class="bi bi-clipboard"></i>
-                                </button>
+                            <div class="d-flex flex-column">
+                                <div class="d-flex align-items-center gap-2">
+                                    <code class="bg-light px-2 py-1">{{ card.card_key }}</code>
+                                    <button type="button" class="btn btn-sm btn-link p-0" onclick="copyToClipboard('{{ card.card_key }}')" title="复制卡密">
+                                        <i class="bi bi-clipboard"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-link p-0" onclick="showRemarkModal('{{ card.id }}', '{{ card.remark }}')" title="编辑备注">
+                                        <i class="bi bi-pencil-square"></i>
+                                    </button>
+                                </div>
+                                {% if card.remark %}
+                                <small class="text-muted mt-1">{{ card.remark }}</small>
+                                {% endif %}
                             </div>
                         </td>
                         <td>{{ card.minutes }}分钟</td>
@@ -265,6 +273,32 @@
         </div>
     </div>
 </div>
+
+<!-- 编辑备注模态框 -->
+<div class="modal fade" id="editRemarkModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">编辑备注</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editRemarkForm" action="{{ url_for('update_remark') }}" method="POST">
+                    <input type="hidden" id="remarkCardId" name="card_id">
+                    <div class="mb-3">
+                        <label for="remark" class="form-label">备注内容</label>
+                        <textarea class="form-control" id="remark" name="remark" rows="3" maxlength="255"></textarea>
+                        <div class="form-text">最多255个字符</div>
+                    </div>
+                    <div class="text-end">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="submit" class="btn btn-primary">保存</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
@@ -300,9 +334,26 @@
     // 更新表格数据
     function updateTableData(cards) {
         cards.forEach(card => {
-            // 查找对应的行
             const row = document.querySelector(`tr[data-card-id="${card.id}"]`);
-            if (!row) return;  // 如果找不到对应的行，跳过
+            if (!row) return;
+
+            // 更新卡密和备注显示
+            const cardCell = row.querySelector('td:first-child');
+            if (cardCell) {
+                const remarkText = cardCell.querySelector('small.text-muted');
+                if (card.remark) {
+                    if (remarkText) {
+                        remarkText.textContent = card.remark;
+                    } else {
+                        const newRemark = document.createElement('small');
+                        newRemark.className = 'text-muted mt-1';
+                        newRemark.textContent = card.remark;
+                        cardCell.querySelector('.d-flex.flex-column').appendChild(newRemark);
+                    }
+                } else if (remarkText) {
+                    remarkText.remove();
+                }
+            }
 
             // 更新状态
             const statusCell = row.querySelector('.card-status');
@@ -442,6 +493,68 @@
     function filterStatus(status) {
         document.getElementById('statusFilter').value = status;
         document.getElementById('searchForm').submit();
+    }
+
+    // 显示备注编辑模态框
+    function showRemarkModal(cardId, remark) {
+        document.getElementById('remarkCardId').value = cardId;
+        document.getElementById('remark').value = remark || '';
+        new bootstrap.Modal(document.getElementById('editRemarkModal')).show();
+    }
+
+    // 处理备注表单提交
+    document.getElementById('editRemarkForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const formData = new FormData(this);
+        
+        fetch(this.action, {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                throw new Error(data.error);
+            }
+            // 关闭模态框
+            bootstrap.Modal.getInstance(document.getElementById('editRemarkModal')).hide();
+            // 显示成功提示
+            showToast('备注更新成功', 'success');
+            // 请求更新数据
+            socket.emit('request_update');
+        })
+        .catch(error => {
+            showToast(error.message || '更新备注失败', 'danger');
+        });
+    });
+
+    // 通用提示框函数
+    function showToast(message, type = 'success') {
+        const toast = document.createElement('div');
+        toast.className = `toast align-items-center text-white bg-${type} border-0 position-fixed bottom-0 end-0 m-3`;
+        toast.setAttribute('role', 'alert');
+        toast.setAttribute('aria-live', 'assertive');
+        toast.setAttribute('aria-atomic', 'true');
+        toast.innerHTML = `
+            <div class="d-flex">
+                <div class="toast-body">
+                    ${message}
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        `;
+        document.body.appendChild(toast);
+        
+        const bsToast = new bootstrap.Toast(toast, {
+            animation: true,
+            autohide: true,
+            delay: 2000
+        });
+        bsToast.show();
+        
+        toast.addEventListener('hidden.bs.toast', () => {
+            document.body.removeChild(toast);
+        });
     }
 </script>
 {% endblock %} 
