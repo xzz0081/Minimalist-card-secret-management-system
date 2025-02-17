@@ -3,13 +3,23 @@
 {% block content %}
 <!-- 工具栏 -->
 <div class="toolbar">
+    <div class="toolbar-item">
+        <div class="btn-group">
+            <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addCardModal">
+                <i class="bi bi-plus-lg"></i> 添加卡密
+            </button>
+            <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#addBulkCardsModal">
+                <i class="bi bi-plus-square"></i> 批量添加
+            </button>
+        </div>
+    </div>
     <div class="toolbar-item flex-grow-1">
-        <form action="{{ url_for('index') }}" method="GET" class="d-flex gap-2 w-100" id="filterForm">
+        <form action="{{ url_for('index') }}" method="GET" class="d-flex gap-2">
             <div class="input-group">
                 <span class="input-group-text"><i class="bi bi-search"></i></span>
                 <input type="text" class="form-control" name="search" placeholder="搜索卡密" value="{{ search }}">
             </div>
-            <select class="form-select w-auto" name="status" onchange="document.getElementById('filterForm').submit()">
+            <select class="form-select" name="status" style="width: auto;">
                 <option value="">全部状态</option>
                 <option value="unused" {% if status == 'unused' %}selected{% endif %}>未使用</option>
                 <option value="used" {% if status == 'used' %}selected{% endif %}>使用中</option>
@@ -19,22 +29,12 @@
         </form>
     </div>
     <div class="toolbar-item">
-        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addCardModal">
-            <i class="bi bi-plus-lg"></i> 新增卡密
+        <a href="{{ url_for('export_cards') }}" class="btn btn-outline-primary">
+            <i class="bi bi-download"></i> 导出
+        </a>
+        <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#importCardsModal">
+            <i class="bi bi-upload"></i> 导入
         </button>
-        <div class="dropdown">
-            <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                <i class="bi bi-three-dots"></i>
-            </button>
-            <ul class="dropdown-menu">
-                <li><a class="dropdown-item" href="{{ url_for('export_cards') }}">
-                    <i class="bi bi-download"></i> 导出CSV
-                </a></li>
-                <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#importModal">
-                    <i class="bi bi-upload"></i> 导入CSV
-                </a></li>
-            </ul>
-        </div>
     </div>
 </div>
 
@@ -48,52 +48,81 @@
         <table class="table table-hover">
             <thead>
                 <tr>
-                    <th style="width: 30%">卡密</th>
-                    <th style="width: 10%">时长</th>
-                    <th style="width: 20%">创建时间</th>
-                    <th style="width: 10%">状态</th>
-                    <th style="width: 20%">剩余时间</th>
-                    <th style="width: 10%">操作</th>
+                    <th>卡密</th>
+                    <th>时长</th>
+                    <th>创建时间</th>
+                    <th>状态</th>
+                    <th>使用时间</th>
+                    <th>剩余时间</th>
+                    <th>设备使用</th>
+                    <th>操作</th>
                 </tr>
             </thead>
-            <tbody id="cards-table-body">
-                {% for card in cards %}
-                <tr id="card-row-{{ card.id }}">
-                    <td>
-                        <div class="d-flex align-items-center gap-2">
-                            <code class="bg-light px-2 py-1">{{ card.card_key }}</code>
-                            <i class="copy-btn bi bi-clipboard" onclick="copyToClipboard('{{ card.card_key }}')" title="复制卡密"></i>
-                        </div>
-                    </td>
-                    <td>{{ card.minutes }}分钟</td>
-                    <td>{{ card.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                    <td>
-                        {% if not card.is_used %}
-                            <span class="badge bg-success">未使用</span>
-                        {% elif card.is_used and card.used_at %}
-                            <span class="badge bg-warning" id="status-{{ card.id }}" 
-                                  data-used-at="{{ card.used_at.isoformat() }}"
-                                  data-minutes="{{ card.minutes }}">使用中</span>
-                        {% else %}
-                            <span class="badge bg-danger">已过期</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        {% if card.is_used and card.used_at %}
-                            <span class="countdown" id="countdown-{{ card.id }}">计算中...</span>
-                        {% else %}
-                            -
-                        {% endif %}
-                    </td>
-                    <td>
-                        <div class="btn-group">
-                            <button type="button" class="btn btn-sm btn-outline-danger" onclick="deleteCard({{ card.id }})">
-                                <i class="bi bi-trash"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-                {% endfor %}
+            <tbody>
+                {% if cards %}
+                    {% for card in cards %}
+                    <tr>
+                        <td><code class="bg-light px-2 py-1">{{ card.card_key }}</code></td>
+                        <td>{{ card.minutes }}分钟</td>
+                        <td>{{ card.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                        <td>
+                            {% if not card.is_used %}
+                                <span class="badge bg-secondary">未使用</span>
+                            {% else %}
+                                {% set remaining = card._calculate_remaining_minutes() %}
+                                {% if remaining > 0 %}
+                                    <span class="badge bg-success">使用中</span>
+                                {% else %}
+                                    <span class="badge bg-danger">已过期</span>
+                                {% endif %}
+                            {% endif %}
+                        </td>
+                        <td>{{ card.used_at.strftime('%Y-%m-%d %H:%M:%S') if card.used_at else '-' }}</td>
+                        <td>
+                            {% if card.is_used %}
+                                {% set remaining = card._calculate_remaining_minutes() %}
+                                {% if remaining > 0 %}
+                                    <span class="text-success">{{ remaining }}分钟</span>
+                                {% else %}
+                                    <span class="text-danger">已过期</span>
+                                {% endif %}
+                            {% else %}
+                                {{ card.minutes }}分钟
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="d-flex align-items-center">
+                                <div class="progress flex-grow-1" style="height: 6px;">
+                                    {% set device_count = card.get_devices()|length %}
+                                    {% set percentage = (device_count / card.max_devices * 100)|int %}
+                                    <div class="progress-bar {% if percentage >= 100 %}bg-danger{% elif percentage >= 75 %}bg-warning{% else %}bg-success{% endif %}" 
+                                         role="progressbar" 
+                                         style="width: {{ percentage }}%">
+                                    </div>
+                                </div>
+                                <small class="ms-2 text-muted">{{ device_count }}/{{ card.max_devices }}</small>
+                            </div>
+                        </td>
+                        <td>
+                            <form action="{{ url_for('delete_card', card_id=card.id) }}" method="POST" class="d-inline">
+                                <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('确定要删除这个卡密吗？')">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="8" class="text-center py-4">
+                            {% if error %}
+                                <div class="text-danger">{{ error }}</div>
+                            {% else %}
+                                暂无卡密数据
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endif %}
             </tbody>
         </table>
     </div>
@@ -137,42 +166,25 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">新增卡密</h5>
+                <h5 class="modal-title">添加卡密</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <ul class="nav nav-tabs mb-3">
-                    <li class="nav-item">
-                        <a class="nav-link active" data-bs-toggle="tab" href="#single">单个生成</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" data-bs-toggle="tab" href="#bulk">批量生成</a>
-                    </li>
-                </ul>
-                <div class="tab-content">
-                    <div class="tab-pane fade show active" id="single">
-                        <form action="{{ url_for('add_card') }}" method="POST">
-                            <div class="mb-3">
-                                <label class="form-label">有效时间（分钟）</label>
-                                <input type="number" class="form-control" name="minutes" required>
-                            </div>
-                            <button type="submit" class="btn btn-primary w-100">生成</button>
-                        </form>
+                <form id="addCardForm" action="{{ url_for('add_card') }}" method="POST">
+                    <div class="mb-3">
+                        <label for="minutes" class="form-label">时长（分钟）</label>
+                        <input type="number" class="form-control" id="minutes" name="minutes" required min="1">
                     </div>
-                    <div class="tab-pane fade" id="bulk">
-                        <form action="{{ url_for('add_bulk_cards') }}" method="POST">
-                            <div class="mb-3">
-                                <label class="form-label">有效时间（分钟）</label>
-                                <input type="number" class="form-control" name="minutes" required>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">生成数量</label>
-                                <input type="number" class="form-control" name="count" required>
-                            </div>
-                            <button type="submit" class="btn btn-primary w-100">批量生成</button>
-                        </form>
+                    <div class="mb-3">
+                        <label for="max_devices" class="form-label">最大设备数</label>
+                        <input type="number" class="form-control" id="max_devices" name="max_devices" required min="1" value="1">
+                        <div class="form-text">设置此卡密最多可以同时在几台设备上使用</div>
                     </div>
-                </div>
+                    <div class="text-end">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="submit" class="btn btn-primary">添加</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
@@ -193,6 +205,38 @@
                         <input type="file" class="form-control" name="file" accept=".csv" required>
                     </div>
                     <button type="submit" class="btn btn-primary w-100">导入</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="addBulkCardsModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">批量添加卡密</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addBulkCardsForm" action="{{ url_for('add_bulk_cards') }}" method="POST">
+                    <div class="mb-3">
+                        <label for="bulk_minutes" class="form-label">时长（分钟）</label>
+                        <input type="number" class="form-control" id="bulk_minutes" name="minutes" required min="1">
+                    </div>
+                    <div class="mb-3">
+                        <label for="bulk_count" class="form-label">数量</label>
+                        <input type="number" class="form-control" id="bulk_count" name="count" required min="1">
+                    </div>
+                    <div class="mb-3">
+                        <label for="bulk_max_devices" class="form-label">最大设备数</label>
+                        <input type="number" class="form-control" id="bulk_max_devices" name="max_devices" required min="1" value="1">
+                        <div class="form-text">设置这批卡密最多可以同时在几台设备上使用</div>
+                    </div>
+                    <div class="text-end">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="submit" class="btn btn-primary">批量添加</button>
+                    </div>
                 </form>
             </div>
         </div>
@@ -220,74 +264,41 @@
     }
 
     function updateCardsTable(cards) {
-        const tbody = document.getElementById('cards-table-body');
+        const tbody = document.querySelector('tbody');
         tbody.innerHTML = '';
 
         cards.forEach(card => {
             const row = document.createElement('tr');
-            row.id = `card-row-${card.id}`;
-            
-            // 卡密列
-            const tdKey = document.createElement('td');
-            tdKey.innerHTML = `
-                <div class="d-flex align-items-center gap-2">
-                    <code class="bg-light px-2 py-1">${card.card_key}</code>
-                    <i class="copy-btn bi bi-clipboard" onclick="copyToClipboard('${card.card_key}')" title="复制卡密"></i>
-                </div>
+            row.innerHTML = `
+                <td><code class="bg-light px-2 py-1">${card.card_key}</code></td>
+                <td>${card.minutes}分钟</td>
+                <td>${new Date(card.created_at).toLocaleString()}</td>
+                <td>
+                    ${card.is_used ? '<span class="badge bg-success">使用中</span>' : '<span class="badge bg-secondary">未使用</span>'}
+                </td>
+                <td>${card.used_at ? new Date(card.used_at).toLocaleString() : '-'}</td>
+                <td>
+                    ${card.is_used ? '<span class="text-success">' + card._calculate_remaining_minutes() + '分钟</span>' : card.minutes + '分钟'}
+                </td>
+                <td>
+                    <div class="d-flex align-items-center">
+                        <div class="progress flex-grow-1" style="height: 6px;">
+                            <div class="progress-bar" role="progressbar" style="width: ${card.get_device_percentage()}%">
+                            </div>
+                        </div>
+                        <small class="ms-2 text-muted">${card.get_device_count()}/${card.max_devices}</small>
+                    </div>
+                </td>
+                <td>
+                    <form action="${url_for('delete_card', card_id=card.id)}" method="POST" class="d-inline">
+                        <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('确定要删除这个卡密吗？')">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </form>
+                </td>
             `;
-            
-            // 时长列
-            const tdMinutes = document.createElement('td');
-            tdMinutes.textContent = `${card.minutes}分钟`;
-            
-            // 创建时间列
-            const tdCreated = document.createElement('td');
-            tdCreated.textContent = new Date(card.created_at).toLocaleString();
-            
-            // 状态列
-            const tdStatus = document.createElement('td');
-            if (!card.is_used) {
-                tdStatus.innerHTML = '<span class="badge bg-success">未使用</span>';
-            } else if (card.is_used && card.used_at) {
-                tdStatus.innerHTML = `
-                    <span class="badge bg-warning" id="status-${card.id}"
-                          data-used-at="${card.used_at}"
-                          data-minutes="${card.minutes}">使用中</span>
-                `;
-            } else {
-                tdStatus.innerHTML = '<span class="badge bg-danger">已过期</span>';
-            }
-            
-            // 剩余时间列
-            const tdCountdown = document.createElement('td');
-            if (card.is_used && card.used_at) {
-                tdCountdown.innerHTML = `<span class="countdown" id="countdown-${card.id}">计算中...</span>`;
-            } else {
-                tdCountdown.textContent = '-';
-            }
-            
-            // 操作列
-            const tdActions = document.createElement('td');
-            tdActions.innerHTML = `
-                <div class="btn-group">
-                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="deleteCard(${card.id})">
-                        <i class="bi bi-trash"></i>
-                    </button>
-                </div>
-            `;
-            
-            row.appendChild(tdKey);
-            row.appendChild(tdMinutes);
-            row.appendChild(tdCreated);
-            row.appendChild(tdStatus);
-            row.appendChild(tdCountdown);
-            row.appendChild(tdActions);
-            
             tbody.appendChild(row);
         });
-
-        // 更新完表格后立即更新倒计时
-        updateCountdown();
     }
 
     function copyToClipboard(text) {

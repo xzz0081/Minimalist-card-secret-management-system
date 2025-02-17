@@ -109,33 +109,56 @@ class Card(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
     is_used = db.Column(db.Boolean, default=False)
     used_at = db.Column(db.DateTime, nullable=True)
-    device_id = db.Column(db.String(32), nullable=True)
+    device_id = db.Column(db.String(500), nullable=True)  # 存储多个设备ID，用逗号分隔
+    max_devices = db.Column(db.Integer, default=1)  # 最大允许设备数量
 
     @classmethod
-    def generate_bulk_cards(cls, minutes, count):
+    def generate_bulk_cards(cls, minutes, count, max_devices=1):
         """批量生成卡密"""
         cards = []
         for _ in range(count):
             card_key = secrets.token_hex(16)
-            cards.append(cls(card_key=card_key, minutes=minutes))
+            cards.append(cls(card_key=card_key, minutes=minutes, max_devices=max_devices))
         return cards
+
+    def add_device(self, device_id):
+        """添加设备ID"""
+        device_list = self.get_devices()
+        if device_id not in device_list:
+            if len(device_list) >= self.max_devices:
+                return False, "超出最大设备数量限制"
+            device_list.append(device_id)
+            self.device_id = ','.join(device_list)
+        return True, "设备添加成功"
+
+    def get_devices(self):
+        """获取设备ID列表"""
+        return self.device_id.split(',') if self.device_id else []
+
+    def is_device_allowed(self, device_id):
+        """检查设备是否允许使用"""
+        device_list = self.get_devices()
+        return device_id in device_list or len(device_list) < self.max_devices
 
     @classmethod
     def export_to_csv(cls, cards):
         """导出卡密到CSV格式"""
         csv_data = []
-        headers = ['卡密', '时长(分钟)', '创建时间', '状态', '使用时间', '剩余时间']
+        headers = ['卡密', '时长(分钟)', '创建时间', '状态', '使用时间', '剩余时间', '最大设备数', '已用设备数']
         csv_data.append(headers)
         
         for card in cards:
             status = '未使用' if not card.is_used else '使用中' if card._calculate_remaining_minutes() > 0 else '已过期'
+            device_count = len(card.get_devices()) if card.device_id else 0
             row = [
                 card.card_key,
                 str(card.minutes),
                 card.created_at.strftime('%Y-%m-%d %H:%M:%S'),
                 status,
                 card.used_at.strftime('%Y-%m-%d %H:%M:%S') if card.used_at else '',
-                str(card._calculate_remaining_minutes())
+                str(card._calculate_remaining_minutes()),
+                str(card.max_devices),
+                str(device_count)
             ]
             csv_data.append(row)
         return csv_data
@@ -153,6 +176,7 @@ class Card(db.Model):
         return imported_cards
 
     def to_dict(self):
+        device_list = self.get_devices()
         return {
             'id': self.id,
             'card_key': self.card_key,
@@ -160,7 +184,8 @@ class Card(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'is_used': self.is_used,
             'used_at': self.used_at.isoformat() if self.used_at else None,
-            'device_id': self.device_id,
+            'device_count': len(device_list),
+            'max_devices': self.max_devices,
             'remaining_minutes': self._calculate_remaining_minutes()
         }
     
@@ -378,11 +403,15 @@ def index():
 def add_card():
     try:
         minutes = request.form.get('minutes', type=int)
+        max_devices = request.form.get('max_devices', type=int, default=1)
+        
         if not minutes or minutes <= 0:
             return jsonify({'error': '无效的分钟数'}), 400
+        if max_devices <= 0:
+            return jsonify({'error': '无效的设备数量限制'}), 400
         
         card_key = secrets.token_hex(16)
-        card = Card(card_key=card_key, minutes=minutes)
+        card = Card(card_key=card_key, minutes=minutes, max_devices=max_devices)
         db.session.add(card)
         db.session.commit()
         
@@ -432,11 +461,11 @@ def verify_card():
         
         response_data = None
         if card.is_used:
-            # 检查设备是否匹配
-            if card.device_id and card.device_id != current_device_id:
+            # 检查设备是否允许使用
+            if not card.is_device_allowed(current_device_id):
                 response_data = {
                     'valid': False,
-                    'message': '该卡密已被其他设备使用'
+                    'message': f'超出最大设备数量限制（{card.max_devices}台设备）'
                 }
                 return jsonify(response_data), 403
                 
@@ -445,6 +474,16 @@ def verify_card():
                 expiration_time = card.used_at + timedelta(minutes=card.minutes)
                 if datetime.now() < expiration_time:
                     remaining_minutes = int((expiration_time - datetime.now()).total_seconds() / 60)
+                    # 如果是新设备，添加到设备列表
+                    if current_device_id not in card.get_devices():
+                        success, message = card.add_device(current_device_id)
+                        if not success:
+                            return jsonify({
+                                'valid': False,
+                                'message': message
+                            }), 403
+                        db.session.commit()
+                    
                 response_data = {
                     'valid': remaining_minutes > 0,
                     'remaining_minutes': remaining_minutes,
@@ -459,7 +498,13 @@ def verify_card():
             # 首次使用卡密
             card.is_used = True
             card.used_at = datetime.now()
-            card.device_id = current_device_id
+            success, message = card.add_device(current_device_id)
+            if not success:
+                return jsonify({
+                    'valid': False,
+                    'message': message
+                }), 403
+            
             db.session.commit()
             
             response_data = {
@@ -484,11 +529,14 @@ def add_bulk_cards():
     try:
         minutes = request.form.get('minutes', type=int)
         count = request.form.get('count', type=int)
+        max_devices = request.form.get('max_devices', type=int, default=1)
         
         if not minutes or minutes <= 0 or not count or count <= 0:
             return jsonify({'error': '无效的参数'}), 400
+        if max_devices <= 0:
+            return jsonify({'error': '无效的设备数量限制'}), 400
         
-        cards = Card.generate_bulk_cards(minutes, count)
+        cards = Card.generate_bulk_cards(minutes, count, max_devices)
         db.session.bulk_save_objects(cards)
         db.session.commit()
         
