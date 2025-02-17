@@ -6,16 +6,8 @@
     <div class="toolbar-item flex-grow-1">
         <form action="{{ url_for('view_logs') }}" method="GET" class="d-flex gap-2 w-100">
             <div class="input-group">
-                <span class="input-group-text"><i class="bi bi-search"></i></span>
-                <input type="text" class="form-control" name="ip" placeholder="搜索IP地址" value="{{ ip_filter }}">
-            </div>
-            <div class="input-group">
-                <span class="input-group-text"><i class="bi bi-device-hdd"></i></span>
-                <input type="text" class="form-control" name="device" placeholder="搜索设备ID" value="{{ device_filter }}">
-            </div>
-            <div class="input-group">
-                <span class="input-group-text"><i class="bi bi-link"></i></span>
-                <input type="text" class="form-control" name="path" placeholder="搜索访问路径" value="{{ path_filter }}">
+                <span class="input-group-text"><i class="bi bi-key"></i></span>
+                <input type="text" class="form-control" name="card_key" placeholder="搜索卡密" value="{{ card_key_filter }}">
             </div>
             <button type="submit" class="btn btn-primary">搜索</button>
         </form>
@@ -25,20 +17,18 @@
 <!-- 日志列表 -->
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-journal-text"></i> 访问日志</span>
+        <span><i class="bi bi-journal-text"></i> 卡密操作日志</span>
         <small class="text-muted">共 {{ pagination.total if pagination else 0 }} 条记录</small>
     </div>
     <div class="table-responsive">
         <table class="table table-hover">
             <thead>
                 <tr>
-                    <th style="width: 15%">访问时间</th>
-                    <th style="width: 15%">IP地址</th>
-                    <th style="width: 20%">设备ID</th>
-                    <th style="width: 20%">访问路径</th>
-                    <th style="width: 10%">请求方法</th>
-                    <th style="width: 10%">状态码</th>
-                    <th style="width: 10%">相关卡密</th>
+                    <th style="width: 20%">操作时间</th>
+                    <th style="width: 15%">操作类型</th>
+                    <th style="width: 35%">卡密</th>
+                    <th style="width: 15%">操作结果</th>
+                    <th style="width: 15%">操作IP</th>
                 </tr>
             </thead>
             <tbody>
@@ -46,18 +36,20 @@
                     {% for log in logs %}
                     <tr>
                         <td>{{ log.access_time }}</td>
-                        <td>{{ log.ip_address }}</td>
-                        <td><code class="bg-light px-2 py-1">{{ log.device_id }}</code></td>
-                        <td>{{ log.path }}</td>
                         <td>
-                            <span class="badge {% if log.method == 'GET' %}bg-success{% elif log.method == 'POST' %}bg-primary{% else %}bg-secondary{% endif %}">
-                                {{ log.method }}
-                            </span>
-                        </td>
-                        <td>
-                            <span class="badge {% if log.status_code < 300 %}bg-success{% elif log.status_code < 400 %}bg-warning{% else %}bg-danger{% endif %}">
-                                {{ log.status_code }}
-                            </span>
+                            {% if log.path == '/api/verify_card' %}
+                                验证卡密
+                            {% elif log.path == '/add_card' %}
+                                添加卡密
+                            {% elif log.path == '/delete_card' %}
+                                删除卡密
+                            {% elif log.path == '/import_cards' %}
+                                导入卡密
+                            {% elif log.path == '/export_cards' %}
+                                导出卡密
+                            {% else %}
+                                其他操作
+                            {% endif %}
                         </td>
                         <td>
                             {% if log.card_key %}
@@ -66,15 +58,24 @@
                             -
                             {% endif %}
                         </td>
+                        <td>
+                            <span class="badge {% if log.status_code < 300 %}bg-success{% elif log.status_code < 400 %}bg-warning{% else %}bg-danger{% endif %}">
+                                {% if log.status_code < 300 %}成功
+                                {% elif log.status_code < 400 %}重定向
+                                {% else %}失败
+                                {% endif %}
+                            </span>
+                        </td>
+                        <td>{{ log.ip_address }}</td>
                     </tr>
                     {% endfor %}
                 {% else %}
                     <tr>
-                        <td colspan="7" class="text-center py-4">
+                        <td colspan="5" class="text-center py-4">
                             {% if error %}
                                 <div class="text-danger">{{ error }}</div>
                             {% else %}
-                                暂无访问日志
+                                暂无操作日志
                             {% endif %}
                         </td>
                     </tr>
@@ -88,7 +89,7 @@
             <ul class="pagination justify-content-center m-0">
                 {% if pagination.has_prev %}
                     <li class="page-item">
-                        <a class="page-link" href="{{ url_for('view_logs', page=pagination.prev_num, ip=ip_filter, device=device_filter, path=path_filter) }}">
+                        <a class="page-link" href="{{ url_for('view_logs', page=pagination.prev_num, card_key=card_key_filter) }}">
                             <i class="bi bi-chevron-left"></i>
                         </a>
                     </li>
@@ -97,7 +98,7 @@
                 {% for page in pagination.iter_pages() %}
                     {% if page %}
                         <li class="page-item {% if page == pagination.page %}active{% endif %}">
-                            <a class="page-link" href="{{ url_for('view_logs', page=page, ip=ip_filter, device=device_filter, path=path_filter) }}">{{ page }}</a>
+                            <a class="page-link" href="{{ url_for('view_logs', page=page, card_key=card_key_filter) }}">{{ page }}</a>
                         </li>
                     {% else %}
                         <li class="page-item disabled"><span class="page-link">...</span></li>
@@ -106,7 +107,7 @@
                 
                 {% if pagination.has_next %}
                     <li class="page-item">
-                        <a class="page-link" href="{{ url_for('view_logs', page=pagination.next_num, ip=ip_filter, device=device_filter, path=path_filter) }}">
+                        <a class="page-link" href="{{ url_for('view_logs', page=pagination.next_num, card_key=card_key_filter) }}">
                             <i class="bi bi-chevron-right"></i>
                         </a>
                     </li>

@@ -248,16 +248,32 @@ class AccessLog(db.Model):
 @app.before_request
 def log_request():
     try:
-        # 跳过静态文件和socket.io请求的日志记录
-        if not request.path.startswith('/static/') and not request.path.startswith('/socket.io/'):
+        # 只记录与卡密相关的操作
+        card_related_paths = [
+            '/api/verify_card',
+            '/add_card',
+            '/delete_card',
+            '/import_cards',
+            '/export_cards'
+        ]
+        
+        if any(request.path.startswith(path) for path in card_related_paths):
             device_id = generate_device_id(request)
+            # 获取请求中的卡密信息
+            card_key = None
+            if request.is_json and request.get_json() and 'card_key' in request.get_json():
+                card_key = request.get_json().get('card_key')
+            elif request.form and 'card_key' in request.form:
+                card_key = request.form.get('card_key')
+            
             log = AccessLog(
                 ip_address=request.remote_addr,
                 device_id=device_id,
                 path=request.path,
                 method=request.method,
                 status_code=200,  # 将在after_request中更新
-                user_agent=str(request.user_agent)
+                user_agent=str(request.user_agent),
+                card_key=card_key
             )
             db.session.add(log)
             db.session.commit()
@@ -575,20 +591,14 @@ def view_logs():
         page = request.args.get('page', 1, type=int)
         per_page = settings.get('per_page', 10)
         
-        # 获取筛选参数
-        ip_filter = request.args.get('ip', '').strip()
-        device_filter = request.args.get('device', '').strip()
-        path_filter = request.args.get('path', '').strip()
+        # 获取卡密筛选参数
+        card_key_filter = request.args.get('card_key', '').strip()
         
         query = AccessLog.query
         
-        # 应用筛选条件
-        if ip_filter:
-            query = query.filter(AccessLog.ip_address.like(f'%{ip_filter}%'))
-        if device_filter:
-            query = query.filter(AccessLog.device_id.like(f'%{device_filter}%'))
-        if path_filter:
-            query = query.filter(AccessLog.path.like(f'%{path_filter}%'))
+        # 应用卡密筛选条件
+        if card_key_filter:
+            query = query.filter(AccessLog.card_key.like(f'%{card_key_filter}%'))
         
         # 按时间倒序排序
         query = query.order_by(AccessLog.access_time.desc())
@@ -599,9 +609,7 @@ def view_logs():
         return render_template('logs.html',
                              logs=pagination.items,
                              pagination=pagination,
-                             ip_filter=ip_filter,
-                             device_filter=device_filter,
-                             path_filter=path_filter,
+                             card_key_filter=card_key_filter,
                              settings=settings.settings)
     except Exception as e:
         error_logger.error(f"访问日志页面出错: {str(e)}", exc_info=True)
