@@ -4,12 +4,12 @@
 <!-- 工具栏 -->
 <div class="toolbar">
     <div class="toolbar-item flex-grow-1">
-        <form action="{{ url_for('index') }}" method="GET" class="d-flex gap-2 w-100">
+        <form action="{{ url_for('index') }}" method="GET" class="d-flex gap-2 w-100" id="filterForm">
             <div class="input-group">
                 <span class="input-group-text"><i class="bi bi-search"></i></span>
                 <input type="text" class="form-control" name="search" placeholder="搜索卡密" value="{{ search }}">
             </div>
-            <select class="form-select w-auto" name="status">
+            <select class="form-select w-auto" name="status" onchange="document.getElementById('filterForm').submit()">
                 <option value="">全部状态</option>
                 <option value="unused" {% if status == 'unused' %}selected{% endif %}>未使用</option>
                 <option value="used" {% if status == 'used' %}selected{% endif %}>使用中</option>

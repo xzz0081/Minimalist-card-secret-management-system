@@ -220,6 +220,57 @@ class Settings:
 
 settings = Settings()
 
+class AccessLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    access_time = db.Column(db.DateTime, nullable=False, default=datetime.now)
+    ip_address = db.Column(db.String(50), nullable=False)
+    device_id = db.Column(db.String(32), nullable=False)
+    path = db.Column(db.String(200), nullable=False)
+    method = db.Column(db.String(10), nullable=False)
+    status_code = db.Column(db.Integer, nullable=False)
+    user_agent = db.Column(db.String(200))
+    card_key = db.Column(db.String(32))  # 如果涉及卡密操作，记录相关卡密
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'access_time': self.access_time.strftime('%Y-%m-%d %H:%M:%S'),
+            'ip_address': self.ip_address,
+            'device_id': self.device_id,
+            'path': self.path,
+            'method': self.method,
+            'status_code': self.status_code,
+            'user_agent': self.user_agent,
+            'card_key': self.card_key
+        }
+
+@app.before_request
+def log_request():
+    # 跳过静态文件请求的日志记录
+    if not request.path.startswith('/static/'):
+        device_id = generate_device_id(request)
+        log = AccessLog(
+            ip_address=request.remote_addr,
+            device_id=device_id,
+            path=request.path,
+            method=request.method,
+            status_code=200,  # 将在after_request中更新
+            user_agent=str(request.user_agent)
+        )
+        db.session.add(log)
+        db.session.commit()
+        # 存储日志ID用于后续更新状态码
+        g.log_id = log.id
+
+@app.after_request
+def update_log_status(response):
+    if hasattr(g, 'log_id'):
+        log = AccessLog.query.get(g.log_id)
+        if log:
+            log.status_code = response.status_code
+            db.session.commit()
+    return response
+
 @app.route('/')
 def index():
     try:
@@ -487,6 +538,47 @@ def update_settings():
     except Exception as e:
         app.logger.error(f"更新设置出错: {str(e)}")
         return jsonify({'error': '更新设置失败'}), 500
+
+@app.route('/logs')
+def view_logs():
+    try:
+        page = request.args.get('page', 1, type=int)
+        per_page = settings.get('per_page', 10)
+        
+        # 获取筛选参数
+        ip_filter = request.args.get('ip', '').strip()
+        device_filter = request.args.get('device', '').strip()
+        path_filter = request.args.get('path', '').strip()
+        
+        query = AccessLog.query
+        
+        # 应用筛选条件
+        if ip_filter:
+            query = query.filter(AccessLog.ip_address.like(f'%{ip_filter}%'))
+        if device_filter:
+            query = query.filter(AccessLog.device_id.like(f'%{device_filter}%'))
+        if path_filter:
+            query = query.filter(AccessLog.path.like(f'%{path_filter}%'))
+        
+        # 按时间倒序排序
+        query = query.order_by(AccessLog.access_time.desc())
+        
+        # 执行分页
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+        
+        return render_template('logs.html',
+                             logs=pagination.items,
+                             pagination=pagination,
+                             ip_filter=ip_filter,
+                             device_filter=device_filter,
+                             path_filter=path_filter,
+                             settings=settings.settings)
+    except Exception as e:
+        error_logger.error(f"访问日志页面出错: {str(e)}", exc_info=True)
+        return render_template('logs.html',
+                             logs=[],
+                             error="获取日志列表失败",
+                             settings=settings.settings)
 
 @app.errorhandler(404)
 def not_found_error(error):
