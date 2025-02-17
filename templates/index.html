@@ -74,7 +74,7 @@
             <tbody>
                 {% if cards %}
                     {% for card in cards %}
-                    <tr>
+                    <tr data-card-id="{{ card.id }}">
                         <td>
                             <div class="d-flex align-items-center gap-2">
                                 <code class="bg-light px-2 py-1">{{ card.card_key }}</code>
@@ -85,24 +85,27 @@
                         </td>
                         <td>{{ card.minutes }}分钟</td>
                         <td>{{ card.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
-                        <td>
+                        <td class="card-status">
                             {% if not card.is_used %}
                                 <span class="badge bg-secondary">未使用</span>
                             {% else %}
-                                {% set remaining = card._calculate_remaining_minutes() %}
-                                {% if remaining > 0 %}
+                                {% set status = card.get_status() %}
+                                {% if status == "使用中" %}
                                     <span class="badge bg-success">使用中</span>
-                                {% else %}
+                                {% elif status == "已过期" %}
                                     <span class="badge bg-danger">已过期</span>
                                 {% endif %}
                             {% endif %}
                         </td>
-                        <td>{{ card.used_at.strftime('%Y-%m-%d %H:%M:%S') if card.used_at else '-' }}</td>
-                        <td>
+                        <td class="card-used-at">{{ card.used_at.strftime('%Y-%m-%d %H:%M:%S') if card.used_at else '-' }}</td>
+                        <td class="card-remaining">
                             {% if card.is_used %}
-                                {% set remaining = card._calculate_remaining_minutes() %}
-                                {% if remaining > 0 %}
-                                    <span class="text-success">{{ remaining }}分钟</span>
+                                {% if not card.is_expired() %}
+                                    <div class="countdown" 
+                                         data-used-at="{{ card.used_at.isoformat() }}" 
+                                         data-minutes="{{ card.minutes }}">
+                                        计算中...
+                                    </div>
                                 {% else %}
                                     <span class="text-danger">已过期</span>
                                 {% endif %}
@@ -110,7 +113,7 @@
                                 {{ card.minutes }}分钟
                             {% endif %}
                         </td>
-                        <td>
+                        <td class="card-devices">
                             <div class="d-flex align-items-center">
                                 <div class="progress flex-grow-1" style="height: 6px;">
                                     {% set device_count = card.get_devices()|length %}
@@ -267,68 +270,144 @@
 {% block extra_js %}
 <script>
     // Socket.IO 连接和更新逻辑
-    const socket = io();
-    socket.on('cards_update', function(data) {
-        updateCardsTable(data.cards);
+    const socket = io({
+        transports: ['websocket'],
+        upgrade: false,
+        reconnection: true,           // 启用自动重连
+        reconnectionAttempts: 5,      // 最大重连次数
+        reconnectionDelay: 1000       // 重连延迟时间
     });
 
-    // 删除卡密确认
-    function deleteCard(cardId) {
-        if (confirm('确定要删除这个卡密吗？')) {
-            const form = document.createElement('form');
-            form.method = 'POST';
-            form.action = `/delete_card/${cardId}`;
-            document.body.appendChild(form);
-            form.submit();
+    socket.on('connect', function() {
+        console.log('Connected to server');
+    });
+    
+    socket.on('cards_update', function(data) {
+        console.log('Received cards update:', data);
+        if (data && data.cards) {
+            updateTableData(data.cards);
         }
-    }
+    });
+    
+    socket.on('disconnect', function() {
+        console.log('Disconnected from server');
+    });
 
-    function updateCardsTable(cards) {
-        const tbody = document.querySelector('tbody');
-        tbody.innerHTML = '';
+    socket.on('connect_error', function(error) {
+        console.log('Connection error:', error);
+    });
 
+    // 更新表格数据
+    function updateTableData(cards) {
         cards.forEach(card => {
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td><code class="bg-light px-2 py-1">${card.card_key}</code></td>
-                <td>${card.minutes}分钟</td>
-                <td>${new Date(card.created_at).toLocaleString()}</td>
-                <td>
-                    ${card.is_used ? '<span class="badge bg-success">使用中</span>' : '<span class="badge bg-secondary">未使用</span>'}
-                </td>
-                <td>${card.used_at ? new Date(card.used_at).toLocaleString() : '-'}</td>
-                <td>
-                    ${card.is_used ? '<span class="text-success">' + card._calculate_remaining_minutes() + '分钟</span>' : card.minutes + '分钟'}
-                </td>
-                <td>
+            // 查找对应的行
+            const row = document.querySelector(`tr[data-card-id="${card.id}"]`);
+            if (!row) return;  // 如果找不到对应的行，跳过
+
+            // 更新状态
+            const statusCell = row.querySelector('.card-status');
+            if (statusCell) {
+                let statusHtml = '';
+                if (!card.is_used) {
+                    statusHtml = '<span class="badge bg-secondary">未使用</span>';
+                } else if (card.status === "使用中") {
+                    statusHtml = '<span class="badge bg-success">使用中</span>';
+                } else {
+                    statusHtml = '<span class="badge bg-danger">已过期</span>';
+                }
+                statusCell.innerHTML = statusHtml;
+            }
+
+            // 更新使用时间
+            const usedAtCell = row.querySelector('.card-used-at');
+            if (usedAtCell) {
+                usedAtCell.textContent = card.used_at ? new Date(card.used_at).toLocaleString() : '-';
+            }
+
+            // 更新剩余时间
+            const remainingCell = row.querySelector('.card-remaining');
+            if (remainingCell) {
+                if (card.is_used) {
+                    if (card.status !== "已过期") {
+                        remainingCell.innerHTML = `
+                            <div class="countdown" 
+                                 data-used-at="${card.used_at}" 
+                                 data-minutes="${card.minutes}">
+                                计算中...
+                            </div>`;
+                    } else {
+                        remainingCell.innerHTML = '<span class="text-danger">已过期</span>';
+                    }
+                } else {
+                    remainingCell.textContent = `${card.minutes}分钟`;
+                }
+            }
+
+            // 更新设备使用情况
+            const deviceCell = row.querySelector('.card-devices');
+            if (deviceCell) {
+                const percentage = (card.device_count / card.max_devices * 100);
+                deviceCell.innerHTML = `
                     <div class="d-flex align-items-center">
                         <div class="progress flex-grow-1" style="height: 6px;">
-                            <div class="progress-bar" role="progressbar" style="width: ${card.get_device_percentage()}%">
+                            <div class="progress-bar ${percentage >= 100 ? 'bg-danger' : percentage >= 75 ? 'bg-warning' : 'bg-success'}" 
+                                 role="progressbar" 
+                                 style="width: ${percentage}%">
                             </div>
                         </div>
-                        <small class="ms-2 text-muted">${card.get_device_count()}/${card.max_devices}</small>
-                    </div>
-                </td>
-                <td>
-                    <form action="${url_for('delete_card', card_id=card.id)}" method="POST" class="d-inline">
-                        <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('确定要删除这个卡密吗？')">
-                            <i class="bi bi-trash"></i>
-                        </button>
-                    </form>
-                </td>
-            `;
-            tbody.appendChild(row);
+                        <small class="ms-2 text-muted">${card.device_count}/${card.max_devices}</small>
+                    </div>`;
+            }
+        });
+
+        // 更新完后重新启动倒计时
+        updateAllCountdowns();
+    }
+
+    // 更新所有倒计时
+    function updateAllCountdowns() {
+        document.querySelectorAll('.countdown').forEach(element => {
+            if (!element.dataset.usedAt || !element.dataset.minutes) return;
+
+            const usedAt = new Date(element.dataset.usedAt);
+            const totalMinutes = parseInt(element.dataset.minutes);
+            const now = new Date();
+            
+            // 计算过期时间
+            const expirationTime = new Date(usedAt.getTime() + totalMinutes * 60000);
+            
+            // 如果已过期
+            if (now >= expirationTime) {
+                element.innerHTML = '<span class="text-danger">已过期</span>';
+                // 通知服务器更新状态
+                socket.emit('status_check', { timestamp: now.toISOString() });
+                return;
+            }
+            
+            // 计算剩余时间
+            const remainingTime = expirationTime - now;
+            const hours = Math.floor(remainingTime / (1000 * 60 * 60));
+            const minutes = Math.floor((remainingTime % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((remainingTime % (1000 * 60)) / 1000);
+            
+            // 更新显示
+            element.innerHTML = `<span class="text-success">${hours}时${minutes}分${seconds}秒</span>`;
         });
     }
 
-    function filterStatus(status) {
-        document.getElementById('statusFilter').value = status;
-        document.getElementById('searchForm').submit();
-    }
+    // 每秒更新一次倒计时
+    setInterval(updateAllCountdowns, 1000);
+    
+    // 页面加载时立即更新一次
+    document.addEventListener('DOMContentLoaded', function() {
+        updateAllCountdowns();
+        // 请求一次初始数据
+        socket.emit('request_update');
+    });
 
+    // 复制卡密到剪贴板
     function copyToClipboard(text) {
         navigator.clipboard.writeText(text).then(() => {
-            // 创建一个临时的toast提示
             const toast = document.createElement('div');
             toast.className = 'toast align-items-center text-white bg-success border-0 position-fixed bottom-0 end-0 m-3';
             toast.setAttribute('role', 'alert');
@@ -351,7 +430,6 @@
             });
             bsToast.show();
             
-            // 监听隐藏事件，移除DOM元素
             toast.addEventListener('hidden.bs.toast', () => {
                 document.body.removeChild(toast);
             });
@@ -361,39 +439,9 @@
         });
     }
 
-    function updateCountdown() {
-        const now = new Date();
-        document.querySelectorAll('[id^="status-"]').forEach(statusElement => {
-            const id = statusElement.id.split('-')[1];
-            const usedAt = new Date(statusElement.dataset.usedAt);
-            const minutes = parseInt(statusElement.dataset.minutes);
-            const expirationTime = new Date(usedAt.getTime() + minutes * 60000);
-            const countdownElement = document.getElementById(`countdown-${id}`);
-            
-            if (now >= expirationTime) {
-                statusElement.className = 'badge bg-danger';
-                statusElement.textContent = '已过期';
-                if (countdownElement) {
-                    countdownElement.textContent = '已过期';
-                }
-            } else {
-                const remainingTime = expirationTime - now;
-                const remainingHours = Math.floor(remainingTime / (1000 * 60 * 60));
-                const remainingMinutes = Math.floor((remainingTime % (1000 * 60 * 60)) / (1000 * 60));
-                const remainingSeconds = Math.floor((remainingTime % (1000 * 60)) / 1000);
-                
-                statusElement.className = 'badge bg-warning';
-                statusElement.textContent = '使用中';
-                if (countdownElement) {
-                    countdownElement.textContent = `${remainingHours}时${remainingMinutes}分${remainingSeconds}秒`;
-                }
-            }
-        });
+    function filterStatus(status) {
+        document.getElementById('statusFilter').value = status;
+        document.getElementById('searchForm').submit();
     }
-
-    // 每秒更新倒计时
-    setInterval(updateCountdown, 1000);
-    // 页面加载时立即更新一次
-    updateCountdown();
 </script>
 {% endblock %} 

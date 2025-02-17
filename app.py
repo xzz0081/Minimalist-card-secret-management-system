@@ -13,6 +13,7 @@ from io import StringIO
 import logging
 import threading
 from sqlalchemy import func
+import pytz
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = secrets.token_hex(16)
@@ -102,11 +103,15 @@ def rate_limit(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def get_local_time():
+    """获取本地时间"""
+    return datetime.now()
+
 class Card(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     card_key = db.Column(db.String(32), unique=True, nullable=False)
     minutes = db.Column(db.Integer, nullable=False)
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
+    created_at = db.Column(db.DateTime, nullable=False, default=get_local_time)
     is_used = db.Column(db.Boolean, default=False)
     used_at = db.Column(db.DateTime, nullable=True)
     device_id = db.Column(db.String(500), nullable=True)  # 存储多个设备ID，用逗号分隔
@@ -144,11 +149,12 @@ class Card(db.Model):
     def export_to_csv(cls, cards):
         """导出卡密到CSV格式"""
         csv_data = []
-        headers = ['卡密', '时长(分钟)', '创建时间', '状态', '使用时间', '剩余时间', '最大设备数', '已用设备数']
+        headers = ['卡密', '时长(分钟)', '创建时间', '状态', '首次使用时间', '剩余时间', '最大设备数', '已用设备数']
         csv_data.append(headers)
         
         for card in cards:
-            status = '未使用' if not card.is_used else '使用中' if card._calculate_remaining_minutes() > 0 else '已过期'
+            remaining_minutes = card._calculate_remaining_minutes()
+            status = card.get_status()
             device_count = len(card.get_devices()) if card.device_id else 0
             row = [
                 card.card_key,
@@ -156,7 +162,7 @@ class Card(db.Model):
                 card.created_at.strftime('%Y-%m-%d %H:%M:%S'),
                 status,
                 card.used_at.strftime('%Y-%m-%d %H:%M:%S') if card.used_at else '',
-                str(card._calculate_remaining_minutes()),
+                str(remaining_minutes),
                 str(card.max_devices),
                 str(device_count)
             ]
@@ -175,27 +181,98 @@ class Card(db.Model):
                     imported_cards.append(card)
         return imported_cards
 
+    def _calculate_remaining_minutes(self):
+        """计算卡密剩余分钟数"""
+        if not self.is_used:
+            # 未使用的卡密，返回完整时长
+            return self.minutes
+            
+        if not self.used_at:
+            # 异常情况：已使用但没有使用时间
+            return 0
+            
+        # 计算从首次使用开始的剩余时间
+        current_time = get_local_time()
+        expiration_time = self.used_at + timedelta(minutes=self.minutes)
+        
+        if current_time >= expiration_time:
+            return 0
+            
+        # 计算剩余时间（精确到秒）
+        remaining_seconds = (expiration_time - current_time).total_seconds()
+        return max(0, int(remaining_seconds / 60))
+
+    def get_remaining_time(self):
+        """获取剩余时间的详细信息"""
+        if not self.is_used:
+            return {
+                'hours': 0,
+                'minutes': self.minutes,
+                'seconds': 0,
+                'total_seconds': self.minutes * 60
+            }
+            
+        if not self.used_at or self.is_expired():
+            return {
+                'hours': 0,
+                'minutes': 0,
+                'seconds': 0,
+                'total_seconds': 0
+            }
+        
+        current_time = get_local_time()
+        expiration_time = self.used_at + timedelta(minutes=self.minutes)
+        remaining_seconds = int((expiration_time - current_time).total_seconds())
+        
+        hours = remaining_seconds // 3600
+        minutes = (remaining_seconds % 3600) // 60
+        seconds = remaining_seconds % 60
+        
+        return {
+            'hours': hours,
+            'minutes': minutes,
+            'seconds': seconds,
+            'total_seconds': remaining_seconds
+        }
+
     def to_dict(self):
-        device_list = self.get_devices()
+        """将卡密对象转换为字典，用于 JSON 序列化"""
         return {
             'id': self.id,
             'card_key': self.card_key,
             'minutes': self.minutes,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
             'is_used': self.is_used,
             'used_at': self.used_at.isoformat() if self.used_at else None,
-            'device_count': len(device_list),
+            'created_at': self.created_at.isoformat(),
             'max_devices': self.max_devices,
-            'remaining_minutes': self._calculate_remaining_minutes()
+            'device_count': len(self.get_devices()),
+            'status': self.get_status(),
+            'remaining_minutes': self._calculate_remaining_minutes() if self.is_used else self.minutes
         }
-    
-    def _calculate_remaining_minutes(self):
-        if not self.is_used or not self.used_at:
-            return self.minutes
+
+    def is_expired(self):
+        """判断卡密是否过期"""
+        if not self.is_used:
+            # 未使用的卡密永不过期
+            return False
+            
+        if not self.used_at:
+            # 异常情况：已使用但没有使用时间
+            return True
+            
+        # 检查是否超过有效期
+        current_time = get_local_time()
         expiration_time = self.used_at + timedelta(minutes=self.minutes)
-        if datetime.now() >= expiration_time:
-            return 0
-        return int((expiration_time - datetime.now()).total_seconds() / 60)
+        return current_time >= expiration_time
+
+    def get_status(self):
+        """获取卡密状态"""
+        if not self.is_used:
+            return "未使用"
+        elif self.is_expired():
+            return "已过期"
+        else:
+            return "使用中"
 
 def broadcast_card_update():
     """广播卡密更新"""
@@ -338,7 +415,7 @@ def index():
         search = request.args.get('search', '').strip()
         
         # 获取各状态的卡密数量
-        current_time = datetime.now()
+        current_time = get_local_time()
         unused_count = Card.query.filter_by(is_used=False).count()
         
         # 使用中的卡密数量
@@ -484,45 +561,25 @@ def verify_card():
                 'message': '卡密不存在'
             }), 404
         
-        response_data = None
-        if card.is_used:
-            # 检查设备是否允许使用
-            if not card.is_device_allowed(current_device_id):
-                response_data = {
-                    'valid': False,
-                    'message': f'超出最大设备数量限制（{card.max_devices}台设备）'
-                }
-                return jsonify(response_data), 403
-                
-            remaining_minutes = 0
-            if card.used_at:
-                expiration_time = card.used_at + timedelta(minutes=card.minutes)
-                if datetime.now() < expiration_time:
-                    remaining_minutes = int((expiration_time - datetime.now()).total_seconds() / 60)
-                    # 如果是新设备，添加到设备列表
-                    if current_device_id not in card.get_devices():
-                        success, message = card.add_device(current_device_id)
-                        if not success:
-                            return jsonify({
-                                'valid': False,
-                                'message': message
-                            }), 403
-                        db.session.commit()
-                    
-                response_data = {
-                    'valid': remaining_minutes > 0,
-                    'remaining_minutes': remaining_minutes,
-                    'message': '卡密有效' if remaining_minutes > 0 else '卡密已过期'
-                }
-            else:
-                response_data = {
-                    'valid': False,
-                    'message': '卡密已过期'
-                }
-        else:
-            # 首次使用卡密
+        # 检查设备是否允许使用
+        if card.is_used and not card.is_device_allowed(current_device_id):
+            return jsonify({
+                'valid': False,
+                'message': f'超出最大设备数量限制（{card.max_devices}台设备）'
+            }), 403
+        
+        # 如果卡密已过期，直接返回
+        if card.is_expired():
+            return jsonify({
+                'valid': False,
+                'remaining_minutes': 0,
+                'message': '卡密已过期'
+            })
+        
+        # 如果是首次使用卡密
+        if not card.is_used:
             card.is_used = True
-            card.used_at = datetime.now()
+            card.used_at = get_local_time()
             success, message = card.add_device(current_device_id)
             if not success:
                 return jsonify({
@@ -531,16 +588,45 @@ def verify_card():
                 }), 403
             
             db.session.commit()
+            # 立即广播更新
+            try:
+                cards = Card.query.all()
+                card_list = [card.to_dict() for card in cards]
+                socketio.emit('cards_update', {'cards': card_list})
+            except Exception as e:
+                app.logger.error(f"广播卡密更新出错: {str(e)}")
             
-            response_data = {
+            return jsonify({
                 'valid': True,
                 'remaining_minutes': card.minutes,
                 'message': '卡密首次使用成功'
-            }
+            })
         
-        # 广播更新
-        broadcast_card_update()
-        return jsonify(response_data)
+        # 如果是新设备，添加到设备列表
+        if current_device_id not in card.get_devices():
+            success, message = card.add_device(current_device_id)
+            if not success:
+                return jsonify({
+                    'valid': False,
+                    'message': message
+                }), 403
+            db.session.commit()
+            # 立即广播更新
+            try:
+                cards = Card.query.all()
+                card_list = [card.to_dict() for card in cards]
+                socketio.emit('cards_update', {'cards': card_list})
+            except Exception as e:
+                app.logger.error(f"广播卡密更新出错: {str(e)}")
+        
+        # 返回剩余时间
+        remaining_minutes = card._calculate_remaining_minutes()
+        return jsonify({
+            'valid': True,
+            'remaining_minutes': remaining_minutes,
+            'message': '卡密有效'
+        })
+        
     except Exception as e:
         app.logger.error(f"验证卡密出错: {str(e)}")
         db.session.rollback()
@@ -708,6 +794,41 @@ def not_found_error(error):
 @app.errorhandler(500)
 def internal_error(error):
     return render_template('500.html', settings=settings.settings), 500
+
+@socketio.on('connect')
+def handle_connect():
+    """处理客户端连接"""
+    app.logger.info('Client connected')
+    # 发送当前卡密状态
+    broadcast_card_update()
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """处理客户端断开连接"""
+    app.logger.info('Client disconnected')
+
+@socketio.on('request_update')
+def handle_update_request():
+    """处理客户端请求更新数据"""
+    broadcast_card_update()
+
+@socketio.on('status_check')
+def handle_status_check(data):
+    """处理状态检查请求"""
+    try:
+        # 获取所有卡密并检查状态
+        cards = Card.query.all()
+        status_changed = False
+        
+        for card in cards:
+            if card.is_used and not card.is_expired() and card._calculate_remaining_minutes() <= 0:
+                status_changed = True
+                
+        if status_changed:
+            # 如果有状态变化，广播更新
+            broadcast_card_update()
+    except Exception as e:
+        app.logger.error(f"状态检查出错: {str(e)}")
 
 if __name__ == '__main__':
     with app.app_context():
