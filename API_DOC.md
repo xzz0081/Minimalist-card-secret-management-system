@@ -2,16 +2,16 @@
 
 ## API 基本信息
 
-- 基础URL: `http://localhost:5000`
+- 基础URL: `http://localhost:8888`
 - 响应格式: JSON
 - 编码方式: UTF-8
-- 设备限制: 每个卡密仅限一个设备使用
+- 设备限制: 每个卡密可设置最大设备数量
 
 ## API 接口列表
 
 ### 1. 验证卡密
 
-验证卡密的有效性并返回剩余时间。系统会自动识别设备标识，同一个卡密只能在首次使用的设备上继续使用。
+验证卡密的有效性并返回剩余时间。系统会自动识别设备标识，根据卡密设置的最大设备数量限制使用。
 
 **接口地址**
 ```
@@ -20,9 +20,7 @@ POST /api/verify_card
 
 **请求头**
 ```
-Accept: application/json
 Content-Type: application/json
-User-Agent: [客户端标识]  // 用于设备识别，必须保持一致
 ```
 
 **请求体**
@@ -30,31 +28,6 @@ User-Agent: [客户端标识]  // 用于设备识别，必须保持一致
 {
     "card_key": "your_card_key"  // 要验证的卡密
 }
-```
-
-**请求示例**
-```bash
-# 使用 curl
-curl -X POST "http://localhost:8888/api/verify_card" \
-     -H "Accept: application/json" \
-     -H "Content-Type: application/json" \
-     -H "User-Agent: YourApp/1.0" \
-     -d '{"card_key": "your_card_key"}'
-
-# 使用 Python requests
-import requests
-
-response = requests.post(
-    "http://localhost:8888/api/verify_card",
-    headers={
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "YourApp/1.0"
-    },
-    json={
-        "card_key": "your_card_key"
-    }
-)
 ```
 
 **响应参数**
@@ -68,24 +41,24 @@ response = requests.post(
 **响应示例**
 
 ```json
-// 成功响应 - 未使用的卡密
+// 成功响应 - 首次使用卡密
 {
     "valid": true,
     "remaining_minutes": 60,
     "message": "卡密首次使用成功"
 }
 
-// 成功响应 - 已使用但未过期的卡密（同一设备）
+// 成功响应 - 已使用但未过期的卡密
 {
     "valid": true,
     "remaining_minutes": 30,
     "message": "卡密有效"
 }
 
-// 失败响应 - 不同设备使用
+// 失败响应 - 超出设备数量限制
 {
     "valid": false,
-    "message": "该卡密已被其他设备使用"
+    "message": "超出最大设备数量限制（X台设备）"
 }
 
 // 失败响应 - 卡密不存在
@@ -107,7 +80,8 @@ response = requests.post(
 | 状态码 | 说明 |
 |--------|------|
 | 200 | 请求成功 |
-| 403 | 设备限制（已被其他设备使用） |
+| 400 | 请求参数错误 |
+| 403 | 设备数量超限 |
 | 404 | 卡密不存在 |
 | 429 | 请求频率超限 |
 | 500 | 服务器内部错误 |
@@ -119,17 +93,19 @@ response = requests.post(
 import requests
 
 def verify_card(card_key):
-    url = f"http://localhost:5000/api/verify_card/{card_key}"
+    url = "http://localhost:8888/api/verify_card"
     headers = {
-        "Accept": "application/json",
-        "User-Agent": "YourApp/1.0"  # 设备标识，必须保持一致
+        "Content-Type": "application/json"
+    }
+    data = {
+        "card_key": card_key
     }
     
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.post(url, headers=headers, json=data)
         
         if response.status_code == 403:
-            print("该卡密已被其他设备使用")
+            print("超出设备数量限制")
             return False
             
         response.raise_for_status()
@@ -155,11 +131,14 @@ verify_card(card_key)
 ```javascript
 async function verifyCard(cardKey) {
     try {
-        const response = await fetch(`http://localhost:5000/api/verify_card/${cardKey}`, {
-            method: 'GET',
+        const response = await fetch('http://localhost:8888/api/verify_card', {
+            method: 'POST',
             headers: {
-                'Accept': 'application/json'
-            }
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                card_key: cardKey
+            })
         });
         
         const data = await response.json();
@@ -182,71 +161,34 @@ const cardKey = 'your_card_key';
 verifyCard(cardKey);
 ```
 
-### PHP 示例
-```php
-function verifyCard($cardKey) {
-    $url = "http://localhost:5000/api/verify_card/" . $cardKey;
-    
-    $options = [
-        'http' => [
-            'header' => "Accept: application/json\r\n",
-            'method' => 'GET'
-        ]
-    ];
-    
-    $context = stream_context_create($options);
-    
-    try {
-        $response = file_get_contents($url, false, $context);
-        $data = json_decode($response, true);
-        
-        if ($data['valid']) {
-            echo "卡密验证成功！剩余时间：" . $data['remaining_minutes'] . "分钟\n";
-            return true;
-        } else {
-            echo "卡密验证失败：" . $data['message'] . "\n";
-            return false;
-        }
-    } catch (Exception $e) {
-        echo "请求失败：" . $e->getMessage() . "\n";
-        return false;
-    }
-}
-
-// 使用示例
-$cardKey = 'your_card_key';
-verifyCard($cardKey);
-```
-
 ## 注意事项
 
 1. **设备识别**
    - 系统通过请求头中的User-Agent和客户端IP识别设备
-   - 确保在同一设备上使用时保持User-Agent一致
-   - 更换设备或重置设备标识将无法使用已激活的卡密
+   - 设备标识一旦生成将与卡密绑定
+   - 同一设备多次使用相同卡密不会重复计数
 
-2. **时间处理**
-   - 系统使用UTC时间
-   - 请在客户端处理好时区转换
+2. **时间计算**
+   - 卡密激活后立即开始计时
    - 剩余时间精确到分钟
+   - 过期后将无法继续使用
 
-3. **错误处理**
-   - 建议实现请求重试机制
-   - 添加超时处理
-   - 处理网络异常情况
+3. **设备限制**
+   - 每个卡密可设置最大允许设备数
+   - 超出限制后将无法在新设备上使用
+   - 已添加的设备不受影响
 
 4. **安全建议**
    - 在生产环境中使用HTTPS
-   - 添加适当的请求频率限制
-   - 考虑添加API认证机制
-   - 避免设备标识被篡改
+   - 实现请求重试机制
+   - 添加适当的错误处理
+   - 注意频率限制
 
 5. **最佳实践**
-   - 缓存验证结果，避免频繁请求
-   - 实现错误重试机制
-   - 添加日志记录
-   - 监控API调用情况
+   - 定期检查卡密状态
+   - 在到期前提醒用户
    - 保存设备标识信息
+   - 添加日志记录
 
 ## 更新日志
 
