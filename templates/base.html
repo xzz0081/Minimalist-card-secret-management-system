@@ -202,6 +202,12 @@
                     </a>
                 </li>
                 <li class="nav-item">
+                    <a href="{{ url_for('view_logs') }}" class="nav-link {% if request.endpoint == 'view_logs' %}active{% endif %}">
+                        <i class="bi bi-journal-text"></i>
+                        访问日志
+                    </a>
+                </li>
+                <li class="nav-item">
                     <a href="{{ url_for('settings_page') }}" class="nav-link {% if request.endpoint == 'settings_page' %}active{% endif %}">
                         <i class="bi bi-gear"></i>
                         系统设置

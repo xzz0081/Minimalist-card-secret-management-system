@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, redirect, url_for, send_file
+from flask import Flask, render_template, request, jsonify, redirect, url_for, send_file, g
 from flask_sqlalchemy import SQLAlchemy
 from flask_socketio import SocketIO, emit
 from datetime import datetime, timedelta
@@ -12,6 +12,7 @@ import csv
 from io import StringIO
 import logging
 import threading
+from sqlalchemy import func
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = secrets.token_hex(16)
@@ -246,29 +247,35 @@ class AccessLog(db.Model):
 
 @app.before_request
 def log_request():
-    # 跳过静态文件请求的日志记录
-    if not request.path.startswith('/static/'):
-        device_id = generate_device_id(request)
-        log = AccessLog(
-            ip_address=request.remote_addr,
-            device_id=device_id,
-            path=request.path,
-            method=request.method,
-            status_code=200,  # 将在after_request中更新
-            user_agent=str(request.user_agent)
-        )
-        db.session.add(log)
-        db.session.commit()
-        # 存储日志ID用于后续更新状态码
-        g.log_id = log.id
+    try:
+        # 跳过静态文件和socket.io请求的日志记录
+        if not request.path.startswith('/static/') and not request.path.startswith('/socket.io/'):
+            device_id = generate_device_id(request)
+            log = AccessLog(
+                ip_address=request.remote_addr,
+                device_id=device_id,
+                path=request.path,
+                method=request.method,
+                status_code=200,  # 将在after_request中更新
+                user_agent=str(request.user_agent)
+            )
+            db.session.add(log)
+            db.session.commit()
+            # 存储日志ID用于后续更新状态码
+            g.log_id = log.id
+    except Exception as e:
+        error_logger.error(f"记录访问日志出错: {str(e)}", exc_info=True)
 
 @app.after_request
 def update_log_status(response):
-    if hasattr(g, 'log_id'):
-        log = AccessLog.query.get(g.log_id)
-        if log:
-            log.status_code = response.status_code
-            db.session.commit()
+    try:
+        if hasattr(g, 'log_id'):
+            log = AccessLog.query.get(g.log_id)
+            if log:
+                log.status_code = response.status_code
+                db.session.commit()
+    except Exception as e:
+        error_logger.error(f"更新日志状态出错: {str(e)}", exc_info=True)
     return response
 
 @app.route('/')
@@ -283,16 +290,36 @@ def index():
         query = Card.query
         
         # 应用过滤条件
+        current_time = datetime.now()
         if status:
             if status == 'unused':
                 query = query.filter_by(is_used=False)
             elif status == 'used':
-                query = query.filter_by(is_used=True)
-            elif status == 'expired':
+                # 使用中的卡密：已使用且未过期
                 query = query.filter(
                     Card.is_used == True,
-                    Card.used_at <= datetime.now() - timedelta(minutes=Card.minutes)
+                    Card.used_at != None
                 )
+                # 在Python中过滤未过期的卡密
+                cards = query.all()
+                valid_card_ids = [
+                    card.id for card in cards
+                    if card.used_at + timedelta(minutes=card.minutes) > current_time
+                ]
+                query = Card.query.filter(Card.id.in_(valid_card_ids))
+            elif status == 'expired':
+                # 已过期的卡密：已使用且已过期
+                query = query.filter(
+                    Card.is_used == True,
+                    Card.used_at != None
+                )
+                # 在Python中过滤已过期的卡密
+                cards = query.all()
+                expired_card_ids = [
+                    card.id for card in cards
+                    if card.used_at + timedelta(minutes=card.minutes) <= current_time
+                ]
+                query = Card.query.filter(Card.id.in_(expired_card_ids))
         
         # 应用搜索条件
         if search:
@@ -302,8 +329,8 @@ def index():
         query = query.order_by(Card.created_at.desc())
         
         # 执行分页
-        pagination = query.paginate(page=page, per_page=per_page)
-        cards = pagination.items
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+        cards = pagination.items if pagination else []
         
         return render_template('index.html', 
                              cards=cards, 
@@ -312,9 +339,12 @@ def index():
                              search=search,
                              settings=settings.settings)
     except Exception as e:
-        logger.error(f"访问首页出错: {str(e)}")
+        logger.error(f"访问首页出错: {str(e)}", exc_info=True)
         return render_template('index.html', 
                              cards=[], 
+                             pagination=None,
+                             status=status,
+                             search=search,
                              error="获取卡密列表失败",
                              settings=settings.settings)
 
