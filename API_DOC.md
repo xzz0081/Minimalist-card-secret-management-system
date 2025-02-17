@@ -15,36 +15,44 @@
 
 **接口地址**
 ```
-GET /api/verify_card/<card_key>
+POST /api/verify_card
 ```
-
-**请求参数**
-
-| 参数位置 | 参数名 | 类型 | 必填 | 说明 |
-|---------|--------|------|------|------|
-| URL路径 | card_key | string | 是 | 要验证的卡密 |
 
 **请求头**
 ```
 Accept: application/json
+Content-Type: application/json
 User-Agent: [客户端标识]  // 用于设备识别，必须保持一致
+```
+
+**请求体**
+```json
+{
+    "card_key": "your_card_key"  // 要验证的卡密
+}
 ```
 
 **请求示例**
 ```bash
 # 使用 curl
-curl -X GET "http://localhost:5000/api/verify_card/your_card_key" \
+curl -X POST "http://localhost:8888/api/verify_card" \
      -H "Accept: application/json" \
-     -H "User-Agent: YourApp/1.0"
+     -H "Content-Type: application/json" \
+     -H "User-Agent: YourApp/1.0" \
+     -d '{"card_key": "your_card_key"}'
 
 # 使用 Python requests
 import requests
 
-response = requests.get(
-    "http://localhost:5000/api/verify_card/your_card_key",
+response = requests.post(
+    "http://localhost:8888/api/verify_card",
     headers={
         "Accept": "application/json",
+        "Content-Type": "application/json",
         "User-Agent": "YourApp/1.0"
+    },
+    json={
+        "card_key": "your_card_key"
     }
 )
 ```

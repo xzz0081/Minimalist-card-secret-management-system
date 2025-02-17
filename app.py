@@ -67,10 +67,10 @@ class Card(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     card_key = db.Column(db.String(32), unique=True, nullable=False)
     minutes = db.Column(db.Integer, nullable=False)
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
     is_used = db.Column(db.Boolean, default=False)
     used_at = db.Column(db.DateTime, nullable=True)
-    device_id = db.Column(db.String(32), nullable=True)  # 新增：设备标识字段
+    device_id = db.Column(db.String(32), nullable=True)
 
     def to_dict(self):
         return {
@@ -88,9 +88,9 @@ class Card(db.Model):
         if not self.is_used or not self.used_at:
             return self.minutes
         expiration_time = self.used_at + timedelta(minutes=self.minutes)
-        if datetime.utcnow() >= expiration_time:
+        if datetime.now() >= expiration_time:
             return 0
-        return int((expiration_time - datetime.utcnow()).total_seconds() / 60)
+        return int((expiration_time - datetime.now()).total_seconds() / 60)
 
 @app.route('/')
 def index():
@@ -130,10 +130,18 @@ def delete_card(card_id):
         db.session.rollback()
         return jsonify({'error': '删除卡密失败'}), 500
 
-@app.route('/api/verify_card/<card_key>')
+@app.route('/api/verify_card', methods=['POST'])
 @rate_limit
-def verify_card(card_key):
+def verify_card():
     try:
+        data = request.get_json()
+        if not data or 'card_key' not in data:
+            return jsonify({
+                'valid': False,
+                'message': '缺少卡密参数'
+            }), 400
+            
+        card_key = data['card_key']
         current_device_id = generate_device_id(request)
         card = Card.query.filter_by(card_key=card_key).first()
         
@@ -154,8 +162,8 @@ def verify_card(card_key):
             remaining_minutes = 0
             if card.used_at:
                 expiration_time = card.used_at + timedelta(minutes=card.minutes)
-                if datetime.utcnow() < expiration_time:
-                    remaining_minutes = int((expiration_time - datetime.utcnow()).total_seconds() / 60)
+                if datetime.now() < expiration_time:
+                    remaining_minutes = int((expiration_time - datetime.now()).total_seconds() / 60)
                 return jsonify({
                     'valid': remaining_minutes > 0,
                     'remaining_minutes': remaining_minutes,
@@ -168,8 +176,8 @@ def verify_card(card_key):
         
         # 首次使用卡密
         card.is_used = True
-        card.used_at = datetime.utcnow()
-        card.device_id = current_device_id  # 记录设备标识
+        card.used_at = datetime.now()
+        card.device_id = current_device_id
         db.session.commit()
         
         return jsonify({
@@ -197,4 +205,4 @@ def internal_error(error):
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True) 
+    app.run(host='0.0.0.0', port=8888, debug=False)
